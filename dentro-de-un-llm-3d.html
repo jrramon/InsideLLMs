@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dentro de un LLM · visita guiada 3D</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:#0E0E16;color:#EDECE4;font:15px/1.55 -apple-system,"Segoe UI",Roboto,Arial,sans-serif;overflow:hidden}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+#c:active{cursor:grabbing}
+header{position:fixed;top:14px;left:16px;z-index:3;pointer-events:none}
+.brand{font-size:12px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#A8A6B8}
+.brand b{color:#EDECE4;font-weight:700}
+.brand i{font-style:normal;color:#EF9F27}
+#hint{position:fixed;top:14px;right:16px;z-index:3;font-size:12px;color:#B9B7C8;background:rgba(18,17,30,.6);border:1px solid rgba(237,236,228,.13);padding:7px 12px;border-radius:999px;backdrop-filter:blur(8px);transition:opacity .9s}
+#hint.off{opacity:0}
+#panel{position:fixed;left:14px;right:14px;bottom:14px;z-index:3;max-width:500px;background:rgba(18,17,30,.8);border:1px solid rgba(237,236,228,.14);border-radius:14px;padding:16px 18px 13px;backdrop-filter:blur(14px)}
+.eyebrow{font-size:11px;letter-spacing:.2em;color:#EF9F27;font-weight:700;margin-bottom:6px}
+h2{font-family:Georgia,"Times New Roman",serif;font-weight:600;font-size:21px;line-height:1.22;margin-bottom:7px;letter-spacing:.01em}
+#stepBody{max-height:min(36vh,280px);overflow-y:auto;-webkit-overflow-scrolling:touch}
+#stepGeneral{color:#DDDCE6;font-size:13.5px}
+#stepText{color:#B9B7C8;font-size:13px;margin-top:9px;padding-left:10px;border-left:2px solid rgba(239,159,39,.55)}
+#controls{display:flex;align-items:center;gap:12px;margin-top:13px}
+#controls button{appearance:none;background:transparent;border:1px solid rgba(237,236,228,.22);color:#EDECE4;width:38px;height:38px;border-radius:50%;font-size:16px;cursor:pointer;transition:border-color .2s,color .2s,opacity .2s;flex:none}
+#controls button:hover:not(:disabled){border-color:#EF9F27;color:#EF9F27}
+#controls button:disabled{opacity:.3;cursor:default}
+#controls button:focus-visible{outline:2px solid #EF9F27;outline-offset:2px}
+#dots{display:flex;gap:7px;flex:1;justify-content:center}
+#dots .dot{width:8px;height:8px;min-width:8px;border-radius:50%;background:rgba(237,236,228,.18);border:none;padding:0;cursor:pointer}
+#dots .dot.on{background:#EF9F27}
+#dots .dot:hover{background:rgba(239,159,39,.65)}
+#dots .dot:focus-visible{outline:2px solid #EF9F27;outline-offset:2px}
+.legend{display:flex;flex-wrap:wrap;gap:5px 14px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(237,236,228,.1);font-size:11px;color:#A8A6B8}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:9px;height:9px;border-radius:3px;display:inline-block}
+#fallback{display:none;position:fixed;inset:0;z-index:5;background:#0E0E16;place-items:center;text-align:center;padding:30px}
+#fallback.show{display:grid}
+@media (min-width:760px){#panel{left:22px;bottom:22px;right:auto;width:500px}}
+@media (max-width:560px){h2{font-size:18px}#stepText{font-size:13px}.legend{display:none}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<header><div class="brand">Dentro de un <b>LLM</b> · <i>visita guiada 3D</i></div></header>
+<div id="hint">Arrastra para girar · rueda o pellizco para acercar</div>
+<nav id="panel" aria-label="Guía por pasos">
+  <div class="eyebrow" id="stepEyebrow"></div>
+  <h2 id="stepTitle"></h2>
+  <div id="stepBody">
+    <p id="stepGeneral"></p>
+    <p id="stepText"></p>
+  </div>
+  <div id="controls">
+    <button id="prev" aria-label="Paso anterior">←</button>
+    <div id="dots" role="tablist" aria-label="Pasos"></div>
+    <button id="next" aria-label="Paso siguiente">→</button>
+  </div>
+  <div class="legend">
+    <span><i style="background:#8a8a82"></i>vector h</span>
+    <span><i style="background:#6c63d4"></i>matrices W</span>
+    <span><i style="background:#17a673"></i>k · v en caché</span>
+    <span><i style="background:#EF9F27"></i>atención / query</span>
+  </div>
+</nav>
+<div id="fallback"><p>No se ha podido iniciar WebGL o cargar Three.js.<br>Prueba en un navegador de escritorio reciente con conexión.</p></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+//JS-START
+(function(){
+'use strict';
+var fb=document.getElementById('fallback');
+if(!window.THREE){fb.classList.add('show');return;}
+var canvas=document.getElementById('c');
+var renderer;
+try{
+  renderer=new THREE.WebGLRenderer({canvas:canvas,antialias:true});
+}catch(err){fb.classList.add('show');return;}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+
+var scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0e0e16);
+scene.fog=new THREE.Fog(0x0e0e16,95,260);
+var camera=new THREE.PerspectiveCamera(46,2,0.1,600);
+
+scene.add(new THREE.HemisphereLight(0x8f8cc0,0x141420,0.9));
+var key=new THREE.DirectionalLight(0xfff2dd,0.7);key.position.set(30,40,50);scene.add(key);
+var rim=new THREE.DirectionalLight(0x6c63d4,0.35);rim.position.set(-40,20,-40);scene.add(rim);
+
+var RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+var clamp=function(v,a,b){return Math.min(b,Math.max(a,v));};
+var ease=function(t){return t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2;};
+var WORDS=['el','gato','negro','se','sentó'];
+
+/* ---------- helpers ---------- */
+function lambert(color,opacity){
+  var o=(opacity===undefined)?1:opacity;
+  return new THREE.MeshLambertMaterial({color:color,transparent:o<1,opacity:o});
+}
+function basic(color,opacity){
+  var o=(opacity===undefined)?1:opacity;
+  return new THREE.MeshBasicMaterial({color:color,transparent:true,opacity:o,depthWrite:false});
+}
+function box(w,h,d,color,opacity){
+  return new THREE.Mesh(new THREE.BoxGeometry(w,h,d),lambert(color,opacity));
+}
+function edges(mesh,color,opacity){
+  var e=new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry),
+    new THREE.LineBasicMaterial({color:color,transparent:true,opacity:(opacity===undefined)?0.5:opacity}));
+  mesh.add(e);return e;
+}
+function beam(a,b,r,color,opacity){
+  var d=new THREE.Vector3().subVectors(b,a);
+  var len=d.length();
+  var m=new THREE.Mesh(new THREE.CylinderGeometry(r,r,len,10,1,true),basic(color,opacity));
+  m.position.copy(a).addScaledVector(d,0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),d.clone().normalize());
+  return m;
+}
+function makeLabel(text,opts){
+  opts=opts||{};
+  var px=opts.px||84;
+  var weight=opts.weight||600;
+  var color=opts.color||'#EDECE4';
+  var family=opts.serif?'Georgia, serif':'-apple-system, "Segoe UI", Arial, sans-serif';
+  var pad=Math.round(px*0.5);
+  var cv=document.createElement('canvas');
+  var ctx=cv.getContext('2d');
+  ctx.font=weight+' '+px+'px '+family;
+  var w=Math.ceil(ctx.measureText(text).width)+pad*2;
+  cv.width=w;cv.height=px*2;
+  var c2=cv.getContext('2d');
+  c2.font=weight+' '+px+'px '+family;
+  c2.fillStyle=color;
+  c2.globalAlpha=(opts.alpha===undefined)?1:opts.alpha;
+  c2.textBaseline='middle';
+  c2.fillText(text,pad,px);
+  var tex=new THREE.CanvasTexture(cv);
+  tex.minFilter=THREE.LinearFilter;
+  var sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,depthWrite:false}));
+  var h=opts.size||1.4;
+  sp.scale.set(h*(cv.width/cv.height),h,1);
+  return sp;
+}
+var pulses=[],cpulses=[];
+function addPulse(parent,a,b,color,speed,offset,r){
+  var s=new THREE.Mesh(new THREE.SphereGeometry(r||0.15,10,10),basic(color,0.95));
+  parent.add(s);
+  pulses.push({m:s,a:a.clone(),b:b.clone(),t:offset||0,sp:speed||0.5});
+}
+function addCPulse(parent,curve,color,speed,offset,r){
+  var s=new THREE.Mesh(new THREE.SphereGeometry(r||0.13,10,10),basic(color,0.95));
+  parent.add(s);
+  cpulses.push({m:s,c:curve,t:offset||0,sp:speed||0.4});
+}
+function region(x){var g=new THREE.Group();g.position.x=x;scene.add(g);return g;}
+function regionLabel(g,text,y){
+  var s=makeLabel(text,{size:1.5,alpha:0.9,weight:700});
+  s.position.set(0,y,0);g.add(s);
+}
+
+/* ---------- world ---------- */
+var floor=new THREE.GridHelper(280,84,0x2a2a3c,0x1a1a28);
+floor.position.y=-4;scene.add(floor);
+var rail=box(162,0.06,0.06,0x6c63d4,0.45);
+rail.position.set(32,-3.85,0);scene.add(rail);
+(function(){ /* parameter dust */
+  var N=900,pos=new Float32Array(N*3);
+  for(var i=0;i<N;i++){
+    pos[i*3]=-48+Math.random()*164;
+    pos[i*3+1]=-5+Math.random()*24;
+    pos[i*3+2]=-34+Math.random()*68;
+  }
+  var g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  scene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0x6c63d4,size:0.16,transparent:true,opacity:0.38,depthWrite:false})));
+})();
+
+var RA=region(-32),RB=region(-12),RC=region(8),RD=region(30),RE=region(52),RF=region(74),RG=region(96);
+
+/* A · embeddings */
+(function(){
+  var table=box(17,0.5,9,0x221f3a,0.95);table.position.y=-3.2;RA.add(table);edges(table,0x6c63d4,0.55);
+  var grid=new THREE.GridHelper(8.4,10,0x8f86ff,0x4d4694);
+  grid.scale.set(2,1,1.05);grid.position.y=-2.92;RA.add(grid);
+  for(var i=0;i<5;i++){
+    var x=-8+i*4;
+    var b=box(3,1.3,1,0x4a4952,1);b.position.set(x,0.4,0);RA.add(b);edges(b,0x9a99a8,0.35);
+    var w=makeLabel(WORDS[i],{size:0.9});w.position.set(x,0.4,0.75);RA.add(w);
+    addPulse(RA,new THREE.Vector3(x,-2.8,0),new THREE.Vector3(x,-0.35,0),0x17a673,0.32,i*0.2,0.14);
+  }
+  var cap=makeLabel('tabla fija · una fila por token del vocabulario',{size:0.72,alpha:0.7});
+  cap.position.set(0,-4.4,5.2);RA.add(cap);
+  regionLabel(RA,'1 · Embeddings',7);
+})();
+
+/* B · residual stream */
+var B_h=null,B_trio=[],B_cGray=new THREE.Color(0x8a8a82),B_cTeal=new THREE.Color(0x17a673),B_tmp=new THREE.Color();
+(function(){
+  for(var i=0;i<6;i++){
+    var s=box(7.5,0.55,5.5,0x3d3880,0.5);s.position.y=i*2;RB.add(s);edges(s,0x8f86ff,0.4);
+  }
+  B_h=box(1,1,1,0x8a8a82,1);B_h.material.transparent=true;
+  B_h.position.set(0,-2,0);RB.add(B_h);edges(B_h,0xffffff,0.25);
+  var tc=[0x8a8a82,0x17a673,0x0f7a55];
+  for(var bt=0;bt<3;bt++){
+    var m3=box(0.55,0.55,0.55,tc[bt],1);
+    m3.material.transparent=true;m3.material.opacity=0;
+    m3.position.set(4.3+bt*0.85,0,0);RB.add(m3);B_trio.push(m3);
+  }
+  var btl=makeLabel('q · k · v de esa capa',{size:0.55,alpha:0.75});btl.position.set(5.2,11.7,0);RB.add(btl);
+  var cap=makeLabel('h sube capa a capa y absorbe contexto',{size:0.72,alpha:0.7});
+  cap.position.set(0,-3.5,3.6);RB.add(cap);
+  regionLabel(RB,'2 · Capas · flujo residual',13);
+})();
+
+/* C · projections */
+(function(){
+  var h=box(1.1,1.1,1.1,0x8a8a82,1);h.position.set(-7.5,3,0);RC.add(h);edges(h,0xffffff,0.25);
+  var hl=makeLabel('h',{size:0.95,serif:true});hl.position.set(-9,3,0);RC.add(hl);
+  var ys=[6.4,3,-0.4];
+  var names=['W_Q','W_K','W_V'];
+  var outs=[
+    {c:0x8a8a82,n:'q',cap:'se usa una vez',capColor:'#A8A6B8',pulse:0xb9b7ac},
+    {c:0x17a673,n:'k',cap:'→ caché',capColor:'#5fd3a6',pulse:0x5fd3a6},
+    {c:0x0f7a55,n:'v',cap:'→ caché',capColor:'#5fd3a6',pulse:0x5fd3a6}
+  ];
+  for(var i=0;i<3;i++){
+    var y=ys[i];
+    var m=box(0.3,3.4,3.4,0x47418f,0.92);m.position.set(0,y,0);RC.add(m);edges(m,0x9a90ff,0.6);
+    var g=new THREE.GridHelper(3.4,6,0x9a90ff,0x6c63d4);
+    g.rotation.z=Math.PI/2;g.position.set(0.18,y,0);RC.add(g);
+    var lab=makeLabel(names[i],{size:0.78});lab.position.set(0,y+2.25,0);RC.add(lab);
+    var o=box(0.95,0.95,0.95,outs[i].c,1);o.position.set(7,y,0);RC.add(o);edges(o,0xffffff,0.2);
+    var ol=makeLabel(outs[i].n,{size:0.9,serif:true});ol.position.set(7,y+1.25,0);RC.add(ol);
+    var oc=makeLabel(outs[i].cap,{size:0.6,alpha:0.8,color:outs[i].capColor});oc.position.set(7,y-1.15,0);RC.add(oc);
+    RC.add(beam(new THREE.Vector3(-6.9,3,0),new THREE.Vector3(-0.2,y,0),0.05,0x8a8a82,0.45));
+    RC.add(beam(new THREE.Vector3(0.2,y,0),new THREE.Vector3(6.4,y,0),0.05,outs[i].c,0.55));
+    addPulse(RC,new THREE.Vector3(-6.9,3,0),new THREE.Vector3(0,y,0),0xedece4,0.5,i*0.18,0.12);
+    addPulse(RC,new THREE.Vector3(0,y,0),new THREE.Vector3(6.5,y,0),outs[i].pulse,0.5,0.5+i*0.18,0.12);
+  }
+  var atn=box(2,2,0.6,0x47418f,0.95);atn.position.set(10.6,3,0);RC.add(atn);edges(atn,0x9a90ff,0.6);
+  var atl=makeLabel('atención',{size:0.6});atl.position.set(10.6,4.5,0);RC.add(atl);
+  RC.add(beam(new THREE.Vector3(7.5,6.4,0),new THREE.Vector3(9.9,3.6,0),0.045,0x8a8a82,0.5));
+  RC.add(beam(new THREE.Vector3(7.5,3,0),new THREE.Vector3(9.55,3,0),0.045,0x17a673,0.5));
+  RC.add(beam(new THREE.Vector3(7.5,-0.4,0),new THREE.Vector3(9.9,2.4,0),0.045,0x0f7a55,0.5));
+  RC.add(beam(new THREE.Vector3(-7.5,3.6,0),new THREE.Vector3(-7.5,5.7,0),0.05,0xedece4,0.5));
+  var plus=box(0.7,0.7,0.7,0xef9f27,1);plus.position.set(-7.5,6.2,0);RC.add(plus);
+  var pll=makeLabel('+',{size:0.6,color:'#1a1206',weight:700});pll.position.set(-7.5,6.2,0.5);RC.add(pll);
+  RC.add(beam(new THREE.Vector3(-7.5,6.55,0),new THREE.Vector3(-7.5,7.7,0),0.05,0xedece4,0.5));
+  var hp=box(1.1,1.1,1.1,0x2f8f6b,1);hp.position.set(-7.5,8.4,0);RC.add(hp);edges(hp,0xffffff,0.25);
+  var hpl=makeLabel('h′ = h + Δ',{size:0.62,alpha:0.85});hpl.position.set(-7.5,9.7,0);RC.add(hpl);
+  var dCurve=new THREE.QuadraticBezierCurve3(new THREE.Vector3(10.6,4.1,0.4),new THREE.Vector3(1.5,7.6,3.6),new THREE.Vector3(-6.9,6.3,0.4));
+  RC.add(new THREE.Mesh(new THREE.TubeGeometry(dCurve,28,0.06,8,false),basic(0xef9f27,0.6)));
+  addCPulse(RC,dCurve,0xffd27a,0.35,0,0.12);
+  addPulse(RC,new THREE.Vector3(-7.5,3.6,0),new THREE.Vector3(-7.5,7.7,0),0xedece4,0.4,0.5,0.12);
+  var dl=makeLabel('Δ',{size:0.7,color:'#ffd27a'});dl.position.set(2.2,8.3,3.4);RC.add(dl);
+  regionLabel(RC,'3 · Dentro de una capa',10);
+})();
+
+/* D · attention */
+var D_slab=null,F_dot=null,F_bar=null;
+(function(){
+  var wts=[0.07,0.34,0.13,0.22,0.16];
+  for(var i=0;i<5;i++){
+    var x=-8+i*4,isQ=(i===4);
+    var tb=box(3,1.2,1,isQ?0xef9f27:0x4a4952,1);tb.position.set(x,0,0);RD.add(tb);
+    edges(tb,isQ?0xffd27a:0x9a99a8,0.4);
+    var wl=makeLabel(WORDS[i],{size:0.85,color:isQ?'#1a1206':'#EDECE4',weight:isQ?700:600});
+    wl.position.set(x,0,0.72);RD.add(wl);
+    var k=box(0.8,0.8,0.8,0x17a673,1);k.position.set(x-0.55,4,0);RD.add(k);edges(k,0x5fd3a6,0.4);
+    var v=box(0.8,0.8,0.8,0x0f7a55,1);v.position.set(x+0.55,4,0);RD.add(v);edges(v,0x5fd3a6,0.25);
+    var r=0.05+wts[i]*0.55;
+    var a=new THREE.Vector3(8,0.8,0),b2=new THREE.Vector3(x,3.4,0);
+    RD.add(beam(a,b2,r,0xef9f27,Math.min(0.95,0.18+wts[i]*2.2)));
+    addPulse(RD,a,b2,0xffd27a,0.25+wts[i]*0.9,i*0.17,0.11+wts[i]*0.2);
+  }
+  var kv=makeLabel('k · v guardados por token',{size:0.7,alpha:0.85,color:'#5fd3a6'});
+  kv.position.set(0,5.5,0);RD.add(kv);
+  var cap=makeLabel('grosor del haz = peso del softmax',{size:0.72,alpha:0.7});
+  cap.position.set(0,-1.9,2.6);RD.add(cap);
+  D_slab=box(20,2.4,1.4,0xef9f27,0.08);D_slab.position.set(0,0,-1.3);RD.add(D_slab);
+  edges(D_slab,0xffd27a,0.35);
+  var dsl=makeLabel('la capa procesa la fila entera a la vez',{size:0.62,alpha:0.75});
+  dsl.position.set(0,-3.1,2.6);RD.add(dsl);
+  regionLabel(RD,'4 · Atención · todos a la vez',8.6);
+})();
+
+/* E · heads */
+(function(){
+  var heads=[
+    {z:-6,color:0xef9f27,name:'cabeza 3 · token anterior',w:[0.05,0.06,0.08,0.34]},
+    {z:0,color:0xd97757,name:'cabeza 11 · busca el sujeto',w:[0.06,0.34,0.16,0.07]},
+    {z:6,color:0x8f86ff,name:'cabeza 24 · aparca la atención',w:[0.34,0.05,0.05,0.05]}
+  ];
+  heads.forEach(function(hd){
+    var g=new THREE.Group();g.position.z=hd.z;RE.add(g);
+    for(var i=0;i<5;i++){
+      var x=-8+i*4;
+      var b=box(2.8,1,0.9,(i===4)?hd.color:0x4a4952,1);b.position.set(x,0,0);g.add(b);
+      edges(b,0x9a99a8,0.3);
+    }
+    for(var j=0;j<4;j++){
+      var tx=-8+j*4;
+      var r=0.05+hd.w[j]*0.5;
+      var apex=2.2+(8-tx)*0.12;
+      var curve=new THREE.QuadraticBezierCurve3(
+        new THREE.Vector3(8,0.8,0),
+        new THREE.Vector3((8+tx)/2,apex,0),
+        new THREE.Vector3(tx,0.8,0));
+      var tube=new THREE.Mesh(new THREE.TubeGeometry(curve,24,r,8,false),
+        basic(hd.color,Math.min(0.95,0.18+hd.w[j]*2.2)));
+      g.add(tube);
+      addCPulse(g,curve,0xffe9c2,0.22+hd.w[j]*0.8,j*0.22,0.1+hd.w[j]*0.16);
+    }
+    var nl=makeLabel(hd.name,{size:0.72,alpha:0.9});nl.position.set(0,5.3,0);g.add(nl);
+  });
+  regionLabel(RE,'4 · zoom · Cabezas',9.5);
+})();
+
+/* F · KV cache */
+var F_new=[];
+(function(){
+  var rack=box(16.5,0.4,4.6,0x221f3a,0.95);rack.position.y=-1.4;RF.add(rack);edges(rack,0x6c63d4,0.55);
+  for(var cI=0;cI<6;cI++){
+    var x=-6.25+cI*2.5;
+    for(var lI=0;lI<4;lI++){
+      var y=-0.6+lI*1.25;
+      var k=box(0.7,0.7,0.7,0x17a673,1);k.position.set(x-0.45,y,0);RF.add(k);
+      var v=box(0.7,0.7,0.7,0x0f7a55,1);v.position.set(x+0.45,y,0);RF.add(v);
+      if(cI===5){F_new.push(k,v);}else{edges(k,0x5fd3a6,0.28);}
+    }
+    var wl=makeLabel(cI===5?'nuevo':WORDS[cI],{size:0.6,alpha:0.85});
+    wl.position.set(x,-2.25,0);RF.add(wl);
+  }
+  var pre=box(12.2,5.2,2.4,0xef9f27,0.06);pre.position.set(-1.25,1.27,0);RF.add(pre);
+  edges(pre,0xef9f27,0.55);
+  var pl=makeLabel('prefijo reutilizado',{size:0.7,color:'#ffd27a'});pl.position.set(-1.25,4.7,0);RF.add(pl);
+  var cap=makeLabel('un k y un v por token · capa · cabeza',{size:0.7,alpha:0.7});
+  cap.position.set(0,-3.4,2.4);RF.add(cap);
+  for(var rf=0;rf<4;rf++){
+    var rfl=makeLabel('capa '+(rf+1),{size:0.5,alpha:0.7});rfl.position.set(-9.9,-0.6+rf*1.25,0);RF.add(rfl);
+  }
+  RF.add(beam(new THREE.Vector3(9.4,-2,0),new THREE.Vector3(9.4,4.4,0),0.04,0xedece4,0.3));
+  F_dot=new THREE.Mesh(new THREE.SphereGeometry(0.16,10,10),basic(0xedece4,0.95));
+  F_dot.position.set(9.4,1.9,0);RF.add(F_dot);
+  F_bar=box(15.6,1.0,1.5,0xef9f27,0.12);F_bar.position.set(-0.3,-0.6,0);RF.add(F_bar);
+  var frl=makeLabel('el token nuevo lee',{size:0.55,alpha:0.85});frl.position.set(9.5,5.2,0);RF.add(frl);
+  regionLabel(RF,'5 · Caché KV',8.2);
+})();
+
+/* G · generación: la historia de «sentó» */
+var G={expl:false,explT:0,cells:[],chips:[],arcs:[],arcDots:[],slices:[],cols:[-8,-4,0,4,8],rows:[0,3,6]};
+(function(){
+  var cols=G.cols,rows=G.rows;
+  for(var ci=0;ci<5;ci++){
+    G.cells[ci]=[];
+    for(var ri=0;ri<3;ri++){
+      var c=box(1.6,1.2,1,0x4a4952,1);
+      c.position.set(cols[ci],rows[ri],0);RG.add(c);
+      edges(c,0x9a99a8,0.3);
+      G.cells[ci][ri]=c;
+    }
+    RG.add(beam(new THREE.Vector3(cols[ci],-2,0),new THREE.Vector3(cols[ci],7.6,0),0.04,0xedece4,0.26));
+    var tl=makeLabel(WORDS[ci],{size:0.6,alpha:0.85});tl.position.set(cols[ci],-2.8,0);RG.add(tl);
+  }
+  G.qCell=G.cells[4][1];
+  for(var ri2=0;ri2<3;ri2++){
+    var rl=makeLabel('capa '+(ri2+1),{size:0.55,alpha:0.7});rl.position.set(-10.7,rows[ri2],0);RG.add(rl);
+  }
+  for(var k3=0;k3<4;k3++){
+    var x3=cols[k3];
+    var kk=box(0.45,0.45,0.45,0x17a673,1);kk.position.set(x3-0.28,3.95,0);RG.add(kk);
+    var vv=box(0.45,0.45,0.45,0x0f7a55,1);vv.position.set(x3+0.28,3.95,0);RG.add(vv);
+    G.chips.push(kk,vv);
+    var curve=new THREE.QuadraticBezierCurve3(
+      new THREE.Vector3(x3,4.2,0),
+      new THREE.Vector3((x3+8)/2,5.0+(8-x3)*0.07,2.3),
+      new THREE.Vector3(8,4.0,0.45));
+    var tube=new THREE.Mesh(new THREE.TubeGeometry(curve,24,0.07,8,false),basic(0x17a673,0.75));
+    RG.add(tube);G.arcs.push(tube);
+    var dot=new THREE.Mesh(new THREE.SphereGeometry(0.11,10,10),basic(0x5fd3a6,0.95));
+    RG.add(dot);G.arcDots.push({m:dot,c:curve,t:k3*0.25,sp:0.3});
+  }
+  G.spark=new THREE.Mesh(new THREE.SphereGeometry(0.3,12,12),basic(0xef9f27,0.9));
+  G.spark.position.set(8,3,0.9);RG.add(G.spark);
+  G.t4dot=new THREE.Mesh(new THREE.SphereGeometry(0.13,10,10),basic(0xedece4,0.95));
+  G.t4dot.position.set(8,4.6,0);RG.add(G.t4dot);
+  var hues=[0xef9f27,0xd97757,0x8f86ff,0x17a673];
+  for(var s=0;s<8;s++){
+    var sl=box(1.6,0.1,1,hues[s%4],0.95);
+    sl.position.set(8,3,0);sl.visible=false;RG.add(sl);G.slices.push(sl);
+  }
+  G.hit=new THREE.Mesh(new THREE.BoxGeometry(2.2,3.8,1.8),basic(0xffffff,0));
+  G.hit.position.set(8,3,0.3);RG.add(G.hit);
+  G.loop=new THREE.Group();RG.add(G.loop);
+  for(var r5=0;r5<3;r5++){
+    var c5=box(1.6,1.2,1,0x4a4952,1);
+    c5.position.set(12,rows[r5],0);G.loop.add(c5);
+    edges(c5,0x9a99a8,0.3);
+  }
+  G.loop.add(beam(new THREE.Vector3(12,-2,0),new THREE.Vector3(12,7.6,0),0.04,0xedece4,0.22));
+  var t5l=makeLabel('t6 = «en»',{size:0.6,alpha:0.9});t5l.position.set(12,-2.8,0);G.loop.add(t5l);
+  var board=box(2.8,2,0.25,0x221f3a,0.95);board.position.set(12.8,9.1,0);G.loop.add(board);
+  edges(board,0x8f86ff,0.5);
+  var bh=[0.45,0.85,1.25,0.55,0.75];
+  for(var bi=0;bi<5;bi++){
+    var bar=box(0.3,bh[bi],0.3,(bi===2)?0xef9f27:0x8f86ff,0.95);
+    bar.position.set(12.8-0.96+bi*0.48,8.25+bh[bi]/2,0.18);
+    G.loop.add(bar);
+  }
+  var sl5=makeLabel('muestreo',{size:0.55,alpha:0.9});sl5.position.set(12.8,10.55,0);G.loop.add(sl5);
+  var pickl=makeLabel('elige «en»',{size:0.5,color:'#ffd27a'});pickl.position.set(12.8,7.6,0.4);G.loop.add(pickl);
+  G.upCurve=new THREE.QuadraticBezierCurve3(new THREE.Vector3(8,7.6,0),new THREE.Vector3(9.8,9.6,0),new THREE.Vector3(11.4,9.1,0));
+  G.downCurve=new THREE.QuadraticBezierCurve3(new THREE.Vector3(12.8,8.1,0),new THREE.Vector3(14.8,3,0),new THREE.Vector3(12,-1.8,0));
+  G.loop.add(new THREE.Mesh(new THREE.TubeGeometry(G.upCurve,20,0.045,8,false),basic(0xedece4,0.45)));
+  G.loop.add(new THREE.Mesh(new THREE.TubeGeometry(G.downCurve,20,0.045,8,false),basic(0x8a8a82,0.45)));
+  G.lab32=makeLabel('× 32 cabezas en paralelo',{size:0.6,color:'#ffd27a'});
+  G.lab32.position.set(8,5.2,1.2);G.lab32.visible=false;RG.add(G.lab32);
+  G.hintTap=makeLabel('toca la celda ámbar',{size:0.55,alpha:0.8});
+  G.hintTap.position.set(8,1.95,1);RG.add(G.hintTap);
+  var lh=makeLabel('h',{size:0.8,serif:true});lh.position.set(-8,8.4,0);RG.add(lh);
+  G.lkv=makeLabel('k · v en su capa',{size:0.62,color:'#5fd3a6'});G.lkv.position.set(1.4,6.3,2.4);RG.add(G.lkv);
+  G.lq=makeLabel('q nace y muere',{size:0.58,color:'#ffd27a'});G.lq.position.set(8,1.15,1);RG.add(G.lq);
+  var cap=makeLabel('el h de «sentó» sube, lee la caché y el sorteo elige el token 6',{size:0.66,alpha:0.75});
+  cap.position.set(1,-4.1,2.6);RG.add(cap);
+  regionLabel(RG,'6 · Generación',9.8);
+})();
+function cellState(mesh,st){
+  if(st===1){mesh.material.color.setHex(0xef9f27);}
+  else if(st===2){mesh.material.color.setHex(0x136f50);}
+  else{mesh.material.color.setHex(0x4a4952);}
+}
+function G_apply(){
+  for(var ci=0;ci<4;ci++){for(var ri=0;ri<3;ri++){cellState(G.cells[ci][ri],2);}}
+  cellState(G.cells[4][0],2);cellState(G.cells[4][1],1);cellState(G.cells[4][2],0);
+}
+G_apply();
+
+
+/* ---------- steps ---------- */
+var STEPS=[
+ {e:'VISTA GENERAL',t:'La historia de «sentó»',
+  g:'Un modelo de lenguaje escribe prediciendo el siguiente token. Esta es la historia completa de una predicción: la frase «el gato negro se sentó» entra por la izquierda, y la máquina debe decidir el token número 6.',
+  d:'El camino: las palabras se hacen vectores, suben por las capas mirándose entre sí, dejan sus apuntes en la caché y, al final, un sorteo elige «en». Navega con las flechas, arrastra para girar. Los puntos violetas son los parámetros.',
+  target:[33,2.8,0],off:[0,19,112]},
+ {e:'PASO 1 · 6',t:'Embeddings: nace el vector de «sentó»',
+  g:'Los modelos no trabajan con palabras sino con vectores: listas de miles de números. El primer paso es trocear el texto en tokens y darle a cada uno su vector inicial, llamado embedding.',
+  d:'Sobre la mesa, la tabla: una fila fija por cada token del vocabulario. «sentó» recibe su fila igual que los demás — el mismo vector que recibiría en cualquier otra frase. Ese vector es la primera versión de su h.',
+  target:[-32,0,0],off:[2,5,20]},
+ {e:'PASO 2 · 6',t:'La torre: h sube y brotan q, k y v',
+  g:'El h de cada token — que empieza siendo su embedding — atraviesa decenas de capas. En cada una brotan de él tres copias proyectadas (q, k y v), se usan allí mismo, y h continúa el viaje modificado por lo aprendido.',
+  d:'El cubo es el h de «sentó»: en cada capa que cruza le brotan al costado su q (gris, que muere allí) y sus k·v (verdes, que irán a la caché), y el cubo sigue subiendo cada vez más verde: más contextualizado.',
+  target:[-12,5,0],off:[9,4,20]},
+ {e:'PASO 3 · 6',t:'Dentro de una capa: q·k·v y la suma a h',
+  g:'Tres matrices aprendidas proyectan el mismo h en la pregunta (q), la etiqueta (k) y el contenido (v). Con ellas, la atención fabrica una nota Δ — y esa nota se suma a h: h′ = h + Δ. Lo único que sale de la capa es h′.',
+  d:'Sigue el circuito: h entra por la izquierda, las rejillas violetas producen q, k y v, la atención los convierte en Δ, y el Δ vuelve por el arco hasta el «+», donde se grapa a h. La q se descarta; k y v parten hacia la caché.',
+  target:[8,3.6,0],off:[1,2.5,23]},
+ {e:'PASO 4 · 6',t:'Atención: todos los tokens a la vez',
+  g:'Dentro de cada capa no se procesa un token: se procesan todos simultáneamente — es el prefill, que lee el prompt entero capa a capa de golpe. Y ahí cada token mira a los anteriores: su q se compara con cada k y, según encajen, toma más o menos de cada v.',
+  d:'La lámina que respira detrás es la capa procesando la fila entera a la vez. Encima, la atención de «sentó»: su q encaja sobre todo con la k de «gato» — el grosor de cada haz es el peso del softmax. Pulsa → para ampliar las cabezas.',
+  target:[30,2.2,0],off:[0,3,20]},
+ {e:'PASO 4 · ZOOM',t:'32 cabezas en paralelo',
+  g:'Un token necesita mirar atrás por varios motivos a la vez: gramática, referencias, repeticiones. Por eso la atención del paso anterior se ejecuta en muchas «cabezas» paralelas (aquí, 32), cada una con sus matrices y su especialización.',
+  d:'Tres ejemplos reales: una cabeza mira al token anterior, otra busca el sujeto del verbo y otra «aparca» los pesos que no necesita. Las 32 salidas se concatenan y W_O las devuelve, como un único Δ, al h del paso 3.',
+  target:[52,1.8,0],off:[9,7,23]},
+ {e:'PASO 5 · 6',t:'La caché KV: el estante por capas',
+  g:'Generar es token a token, y cada token nuevo necesita las k y v de todos los anteriores en cada capa. Para no recalcularlas se guardan en un estante organizado por capas — y la caché de prompts lo conserva entre peticiones.',
+  d:'Cada columna es un token; cada balda, una capa. El punto que sube a la derecha es el token nuevo leyendo balda a balda: la luz ámbar marca qué fila consulta en cada momento. El marco ámbar es el prefijo que la caché de prompts reutiliza.',
+  target:[74,1.8,0],off:[2,4.5,19]},
+ {e:'PASO 6 · 6',t:'Generación: nace el token 6',
+  g:'Arriba del todo, el h final de «sentó» se puntúa contra el vocabulario entero, el softmax convierte las notas en probabilidades y el muestreo elige una: «en». Su embedding — de la misma tabla del paso 1 — es el inicio de la columna siguiente.',
+  d:'Sigue al punto: el h de «sentó» corona la torre leyendo los arcos de la caché, pasa por el sorteo (se enciende ámbar al elegir «en») y cae, ya gris, como embedding al pie de la columna t6. Toca la celda ámbar para abrirla en sus 32 cabezas.',
+  target:[98,3,0],off:[3.5,4.5,26]}
+];
+
+var cur=0,userYaw=0,userPitch=0,userZoom=1;
+var elE=document.getElementById('stepEyebrow'),
+    elT=document.getElementById('stepTitle'),
+    elG=document.getElementById('stepGeneral'),
+    elD=document.getElementById('stepText'),
+    elBody=document.getElementById('stepBody'),
+    bPrev=document.getElementById('prev'),
+    bNext=document.getElementById('next'),
+    dotsEl=document.getElementById('dots'),
+    hintEl=document.getElementById('hint');
+var dots=[];
+STEPS.forEach(function(s,i){
+  var d=document.createElement('button');
+  d.className='dot';d.setAttribute('role','tab');
+  d.setAttribute('aria-label','Ir al paso '+i);
+  d.addEventListener('click',function(){goStep(i);});
+  dotsEl.appendChild(d);dots.push(d);
+});
+function goStep(i){
+  cur=clamp(i,0,STEPS.length-1);
+  userYaw=0;userPitch=0;userZoom=1;
+  var s=STEPS[cur];
+  elE.textContent=s.e;elT.textContent=s.t;elG.textContent=s.g;elD.textContent=s.d;
+  elBody.scrollTop=0;
+  bPrev.disabled=(cur===0);bNext.disabled=(cur===STEPS.length-1);
+  if(cur!==7){G.expl=false;}
+  dots.forEach(function(d,j){d.classList.toggle('on',j===cur);});
+}
+bPrev.addEventListener('click',function(){goStep(cur-1);});
+bNext.addEventListener('click',function(){goStep(cur+1);});
+window.addEventListener('keydown',function(e){
+  if(e.key==='ArrowRight'){goStep(cur+1);}
+  if(e.key==='ArrowLeft'){goStep(cur-1);}
+});
+goStep(0);
+
+/* ---------- camera rig ---------- */
+var lookCur=new THREE.Vector3(),sph=new THREE.Spherical();
+function desired(){
+  var s=STEPS[cur];
+  var t=new THREE.Vector3().fromArray(s.target);
+  var off=new THREE.Vector3().fromArray(s.off);
+  sph.setFromVector3(off);
+  sph.theta+=userYaw;
+  sph.phi=clamp(sph.phi+userPitch,0.18,Math.PI-0.25);
+  sph.radius*=userZoom;
+  var p=new THREE.Vector3().setFromSpherical(sph).add(t);
+  return {p:p,t:t};
+}
+var d0=desired();
+camera.position.copy(d0.p);lookCur.copy(d0.t);
+
+/* ---------- input ---------- */
+var ptrs=new Map(),drag=false,px=0,py=0,pinchD=0,hintHidden=false;
+function hideHint(){if(!hintHidden){hintHidden=true;hintEl.classList.add('off');}}
+setTimeout(hideHint,8000);
+canvas.addEventListener('pointerdown',function(e){
+  canvas.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId,[e.clientX,e.clientY]);
+  drag=true;px=e.clientX;py=e.clientY;hideHint();
+});
+canvas.addEventListener('pointermove',function(e){
+  if(!ptrs.has(e.pointerId))return;
+  ptrs.set(e.pointerId,[e.clientX,e.clientY]);
+  if(ptrs.size===2){
+    var a=Array.from(ptrs.values());
+    var d2=Math.hypot(a[0][0]-a[1][0],a[0][1]-a[1][1]);
+    if(pinchD>0){userZoom=clamp(userZoom*(pinchD/d2),0.45,2.4);}
+    pinchD=d2;return;
+  }
+  if(!drag)return;
+  userYaw-=(e.clientX-px)*0.005;
+  userPitch-=(e.clientY-py)*0.004;
+  userPitch=clamp(userPitch,-0.9,0.9);
+  px=e.clientX;py=e.clientY;
+});
+function endPtr(e){
+  ptrs.delete(e.pointerId);
+  if(ptrs.size<2)pinchD=0;
+  if(ptrs.size===0)drag=false;
+}
+canvas.addEventListener('pointerup',endPtr);
+canvas.addEventListener('pointercancel',endPtr);
+canvas.addEventListener('wheel',function(e){
+  e.preventDefault();
+  userZoom=clamp(userZoom*(1+e.deltaY*0.001),0.45,2.4);
+  hideHint();
+},{passive:false});
+var ray=new THREE.Raycaster(),ndcV=new THREE.Vector2(),tapXY=null;
+canvas.addEventListener('pointerdown',function(e){tapXY=[e.clientX,e.clientY];});
+canvas.addEventListener('pointerup',function(e){
+  if(!tapXY)return;
+  var moved=Math.hypot(e.clientX-tapXY[0],e.clientY-tapXY[1]);
+  tapXY=null;
+  if(moved>6||cur!==7)return;
+  ndcV.x=(e.clientX/window.innerWidth)*2-1;
+  ndcV.y=-(e.clientY/window.innerHeight)*2+1;
+  ray.setFromCamera(ndcV,camera);
+  if(ray.intersectObject(G.hit,false).length>0){G.expl=!G.expl;}
+});
+
+/* ---------- loop ---------- */
+function resize(){
+  var w=window.innerWidth,h=window.innerHeight;
+  renderer.setSize(w,h,false);
+  camera.aspect=w/h;camera.updateProjectionMatrix();
+}
+window.addEventListener('resize',resize);resize();
+
+var last=performance.now(),time=0,placed=false;
+function placeStatic(){
+  pulses.forEach(function(p){p.m.position.lerpVectors(p.a,p.b,0.55);p.m.material.opacity=0.8;});
+  cpulses.forEach(function(p){p.m.position.copy(p.c.getPoint(0.55));p.m.material.opacity=0.8;});
+  if(B_h){B_h.position.y=5.5;B_h.material.color.copy(B_tmp.copy(B_cGray).lerp(B_cTeal,0.6));}
+  B_trio.forEach(function(m){m.position.y=4;m.material.opacity=0.9;m.scale.setScalar(1);});
+  if(D_slab){D_slab.material.opacity=0.1;}
+  if(F_dot){F_dot.position.set(9.4,1.9,0);F_bar.position.y=1.9;F_bar.material.opacity=0.18;}
+  F_new.forEach(function(m){m.scale.setScalar(1);});
+  if(G.spark){G.spark.material.opacity=0.85;G.spark.scale.setScalar(1);}
+  G.t4dot.position.set(8,4.6,0);
+  G.arcDots.forEach(function(p){p.m.position.copy(p.c.getPoint(0.55));p.m.material.opacity=0.85;});
+}
+function tick(now){
+  var dt=Math.min(0.05,(now-last)/1000);last=now;time+=dt;
+  if(RM){
+    if(!placed){placeStatic();placed=true;}
+  }else{
+    pulses.forEach(function(p){
+      p.t=(p.t+dt*p.sp)%1;
+      p.m.position.lerpVectors(p.a,p.b,ease(p.t));
+      p.m.material.opacity=0.15+0.85*Math.sin(Math.PI*p.t);
+    });
+    cpulses.forEach(function(p){
+      p.t=(p.t+dt*p.sp)%1;
+      p.m.position.copy(p.c.getPoint(ease(p.t)));
+      p.m.material.opacity=0.15+0.85*Math.sin(Math.PI*p.t);
+    });
+    if(B_h){
+      var tB=(time*0.16)%1;
+      B_h.position.y=-2+13.5*tB;
+      B_h.material.color.copy(B_tmp.copy(B_cGray).lerp(B_cTeal,tB));
+      B_h.material.opacity=(tB>0.92)?(1-(tB-0.92)/0.08):1;
+      var nearSlab=Math.max(0,Math.min(5,Math.round(B_h.position.y/2)))*2;
+      var prox=Math.max(0,1-Math.abs(B_h.position.y-nearSlab)/0.9);
+      for(var bt2=0;bt2<3;bt2++){
+        B_trio[bt2].position.y=nearSlab;
+        B_trio[bt2].material.opacity=prox*0.95;
+        B_trio[bt2].scale.setScalar(0.4+0.6*prox);
+      }
+    }
+    if(D_slab){D_slab.material.opacity=0.05+0.07*(0.5+0.5*Math.sin(time*1.5));}
+    if(F_dot){
+      var tfr=(time*0.16)%1,fy=-2+6.4*tfr;
+      F_dot.position.set(9.4,fy,0);
+      var ri5=Math.max(0,Math.min(3,Math.round((fy+0.6)/1.25)));
+      var rowY=-0.6+ri5*1.25;
+      F_bar.position.y=rowY;
+      F_bar.material.opacity=0.04+0.3*Math.max(0,1-Math.abs(fy-rowY)/0.8);
+    }
+    var tF=(time*0.22)%1,sF;
+    if(tF<0.25){sF=ease(tF/0.25);}
+    else if(tF<0.75){sF=1;}
+    else{sF=1-ease((tF-0.75)/0.25);}
+    var sc=0.05+0.95*sF;
+    F_new.forEach(function(m){m.scale.setScalar(sc);});
+    var tg4=(time*0.1)%1;
+    if(tg4<0.5){
+      G.t4dot.position.set(8,-2+9.6*(tg4/0.5),0);
+      G.t4dot.material.color.setHex(0xedece4);
+    }else if(tg4<0.68){
+      G.t4dot.position.copy(G.upCurve.getPoint((tg4-0.5)/0.18));
+      G.t4dot.material.color.setHex(0xedece4);
+    }else if(tg4<0.78){
+      G.t4dot.position.set(12.8,9.1,0.35);
+      G.t4dot.material.color.setHex(0xef9f27);
+    }else{
+      G.t4dot.position.copy(G.downCurve.getPoint((tg4-0.78)/0.22));
+      G.t4dot.material.color.setHex(0x8a8a82);
+    }
+    var tq=(time*0.45)%1,sq=Math.sin(Math.PI*tq);
+    G.spark.scale.setScalar(0.35+0.85*sq);
+    G.spark.material.opacity=0.1+0.9*sq;
+    G.arcDots.forEach(function(p){
+      p.t=(p.t+dt*p.sp)%1;
+      p.m.position.copy(p.c.getPoint(ease(p.t)));
+      p.m.material.opacity=0.15+0.85*Math.sin(Math.PI*p.t);
+    });
+  }
+  var et=G.expl?1:0;
+  if(RM){G.explT=et;}else{G.explT+=(et-G.explT)*Math.min(1,dt*6);}
+  var ke=ease(clamp(G.explT,0,1));
+  G.qCell.scale.setScalar(Math.max(0.03,1-0.97*ke));
+  for(var si=0;si<8;si++){
+    var sl2=G.slices[si];
+    sl2.visible=(ke>0.02);
+    sl2.position.set(8,3+(si-3.5)*0.42*ke,0.45*ke);
+    sl2.material.opacity=0.95*ke;
+  }
+  G.lab32.visible=(ke>0.5);
+  G.hintTap.visible=(ke<0.05);
+  var d=desired();
+  var cl=RM?1:0.055;
+  camera.position.lerp(d.p,cl);
+  lookCur.lerp(d.t,RM?1:0.075);
+  camera.lookAt(lookCur);
+  renderer.render(scene,camera);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+})();
+//JS-END
+</script>
+</body>
+</html>
