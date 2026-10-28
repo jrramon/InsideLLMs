@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>El algoritmo de un LLM · visita guiada 3D</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:#0E0E16;color:#EDECE4;font:15px/1.55 -apple-system,"Segoe UI",Roboto,Arial,sans-serif;overflow:hidden}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+#c:active{cursor:grabbing}
+header{position:fixed;top:14px;left:16px;z-index:3;pointer-events:none}
+.brand{font-size:12px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#A8A6B8}
+.brand b{color:#EDECE4;font-weight:700}
+.brand i{font-style:normal;color:#EF9F27}
+#hint{position:fixed;top:14px;right:16px;z-index:3;font-size:12px;color:#B9B7C8;background:rgba(18,17,30,.6);border:1px solid rgba(237,236,228,.13);padding:7px 12px;border-radius:999px;backdrop-filter:blur(8px);transition:opacity .9s}
+#hint.off{opacity:0}
+#panel{position:fixed;left:14px;right:14px;bottom:14px;z-index:3;max-width:500px;background:rgba(18,17,30,.8);border:1px solid rgba(237,236,228,.14);border-radius:14px;padding:16px 18px 13px;backdrop-filter:blur(14px)}
+.eyebrow{font-size:11px;letter-spacing:.2em;color:#EF9F27;font-weight:700;margin-bottom:6px}
+h2{font-family:Georgia,"Times New Roman",serif;font-weight:600;font-size:21px;line-height:1.22;margin-bottom:7px;letter-spacing:.01em}
+#stepBody{max-height:min(36vh,280px);overflow-y:auto;-webkit-overflow-scrolling:touch}
+#stepGeneral{color:#DDDCE6;font-size:13.5px}
+#stepText{color:#B9B7C8;font-size:13px;margin-top:9px;padding-left:10px;border-left:2px solid rgba(239,159,39,.55)}
+#controls{display:flex;align-items:center;gap:12px;margin-top:13px}
+#controls button{appearance:none;background:transparent;border:1px solid rgba(237,236,228,.22);color:#EDECE4;width:38px;height:38px;border-radius:50%;font-size:16px;cursor:pointer;transition:border-color .2s,color .2s,opacity .2s;flex:none}
+#controls button:hover:not(:disabled){border-color:#EF9F27;color:#EF9F27}
+#controls button:disabled{opacity:.3;cursor:default}
+#controls button:focus-visible{outline:2px solid #EF9F27;outline-offset:2px}
+#dots{display:flex;gap:7px;flex:1;justify-content:center;flex-wrap:wrap}
+#dots .dot{width:8px;height:8px;min-width:8px;border-radius:50%;background:rgba(237,236,228,.18);border:none;padding:0;cursor:pointer}
+#dots .dot.on{background:#EF9F27}
+#dots .dot:hover{background:rgba(239,159,39,.65)}
+#dots .dot:focus-visible{outline:2px solid #EF9F27;outline-offset:2px}
+.legend{display:flex;flex-wrap:wrap;gap:5px 14px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(237,236,228,.1);font-size:11px;color:#A8A6B8}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:9px;height:9px;border-radius:3px;display:inline-block}
+#fallback{display:none;position:fixed;inset:0;z-index:5;background:#0E0E16;place-items:center;text-align:center;padding:30px}
+#fallback.show{display:grid}
+@media (min-width:760px){#panel{left:22px;bottom:22px;right:auto;width:500px}}
+@media (max-width:560px){h2{font-size:18px}#stepText{font-size:13px}.legend{display:none}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<header><div class="brand">El <b>algoritmo</b> de un LLM · <i>visita guiada 3D</i></div></header>
+<div id="hint">Arrastra para girar · rueda o pellizco para acercar</div>
+<nav id="panel" aria-label="Guía por pasos">
+  <div class="eyebrow" id="stepEyebrow"></div>
+  <h2 id="stepTitle"></h2>
+  <div id="stepBody">
+    <p id="stepGeneral"></p>
+    <p id="stepText"></p>
+  </div>
+  <div id="controls">
+    <button id="prev" aria-label="Paso anterior">←</button>
+    <div id="dots" role="tablist" aria-label="Pasos"></div>
+    <button id="next" aria-label="Paso siguiente">→</button>
+  </div>
+  <div class="legend">
+    <span><i style="background:#8a8a82"></i>vector h</span>
+    <span><i style="background:#6c63d4"></i>matrices W (parámetros)</span>
+    <span><i style="background:#17a673"></i>k · v</span>
+    <span><i style="background:#EF9F27"></i>q · pesos · Δ</span>
+  </div>
+</nav>
+<div id="fallback"><p>No se ha podido iniciar WebGL o cargar Three.js.<br>Prueba en un navegador de escritorio reciente con conexión.</p></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+//JS-START
+(function(){
+'use strict';
+var fb=document.getElementById('fallback');
+if(!window.THREE){fb.classList.add('show');return;}
+var canvas=document.getElementById('c');
+var renderer;
+try{
+  renderer=new THREE.WebGLRenderer({canvas:canvas,antialias:true});
+}catch(err){fb.classList.add('show');return;}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+
+var scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0e0e16);
+scene.fog=new THREE.Fog(0x0e0e16,170,540);
+var camera=new THREE.PerspectiveCamera(46,2,0.1,900);
+
+scene.add(new THREE.HemisphereLight(0x8f8cc0,0x141420,0.9));
+var key=new THREE.DirectionalLight(0xfff2dd,0.7);key.position.set(30,40,50);scene.add(key);
+var rim=new THREE.DirectionalLight(0x6c63d4,0.35);rim.position.set(-40,20,-40);scene.add(rim);
+
+var RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+var clamp=function(v,a,b){return Math.min(b,Math.max(a,v));};
+var ease=function(t){return t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2;};
+var WORDS=['el','gato','negro','se','sentó'];
+var seed=7;
+function rnd(){seed=(seed*16807)%2147483647;return (seed-1)/2147483646;}
+function randVals(n,a){var o=[];for(var i=0;i<n;i++){o.push((rnd()*2-1)*(a||1));}return o;}
+function fmt(v){return v.toFixed(2).replace('.',',').replace('-','−');}
+function V(x,y,z){return new THREE.Vector3(x,y,z||0);}
+
+/* ---------- helpers ---------- */
+function lambert(color,opacity){
+  var o=(opacity===undefined)?1:opacity;
+  return new THREE.MeshLambertMaterial({color:color,transparent:o<1,opacity:o});
+}
+function basic(color,opacity){
+  var o=(opacity===undefined)?1:opacity;
+  return new THREE.MeshBasicMaterial({color:color,transparent:true,opacity:o,depthWrite:false});
+}
+function box(w,h,d,color,opacity){
+  return new THREE.Mesh(new THREE.BoxGeometry(w,h,d),lambert(color,opacity));
+}
+function edges(mesh,color,opacity){
+  var e=new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry),
+    new THREE.LineBasicMaterial({color:color,transparent:true,opacity:(opacity===undefined)?0.5:opacity}));
+  mesh.add(e);return e;
+}
+function outline(parent,w,h,d,x,y,z,color,op){
+  var e=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w,h,d)),
+    new THREE.LineBasicMaterial({color:color,transparent:true,opacity:op}));
+  e.position.set(x,y,z||0);parent.add(e);return e;
+}
+function beam(a,b,r,color,opacity){
+  var d=new THREE.Vector3().subVectors(b,a);
+  var len=d.length();
+  var m=new THREE.Mesh(new THREE.CylinderGeometry(r,r,len,10,1,true),basic(color,opacity));
+  m.position.copy(a).addScaledVector(d,0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),d.clone().normalize());
+  return m;
+}
+function makeLabel(text,opts){
+  opts=opts||{};
+  var px=opts.px||84;
+  var weight=opts.weight||600;
+  var color=opts.color||'#EDECE4';
+  var family=opts.serif?'Georgia, serif':'-apple-system, "Segoe UI", Arial, sans-serif';
+  var pad=Math.round(px*0.5);
+  var cv=document.createElement('canvas');
+  var ctx=cv.getContext('2d');
+  ctx.font=weight+' '+px+'px '+family;
+  var w=Math.ceil(ctx.measureText(text).width)+pad*2;
+  cv.width=w;cv.height=px*2;
+  var c2=cv.getContext('2d');
+  c2.font=weight+' '+px+'px '+family;
+  c2.fillStyle=color;
+  c2.globalAlpha=(opts.alpha===undefined)?1:opts.alpha;
+  c2.textBaseline='middle';
+  c2.fillText(text,pad,px);
+  var tex=new THREE.CanvasTexture(cv);
+  tex.minFilter=THREE.LinearFilter;
+  var sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,depthWrite:false}));
+  var h=opts.size||1.4;
+  sp.scale.set(h*(cv.width/cv.height),h,1);
+  return sp;
+}
+/* lab: label placed in a parent; align 'left' / 'right' anchors that edge at x */
+function lab(parent,text,x,y,z,opts){
+  opts=opts||{};
+  var s=makeLabel(text,opts);
+  var ax=(opts.align==='left')?s.scale.x/2:(opts.align==='right')?-s.scale.x/2:0;
+  s.position.set(x+ax,y,z||0);parent.add(s);return s;
+}
+var pulses=[],cpulses=[],anims=[];
+function addPulse(parent,a,b,color,speed,offset,r){
+  var s=new THREE.Mesh(new THREE.SphereGeometry(r||0.15,10,10),basic(color,0.95));
+  parent.add(s);
+  pulses.push({m:s,a:a.clone(),b:b.clone(),t:offset||0,sp:speed||0.5});
+}
+function addCPulse(parent,curve,color,speed,offset,r){
+  var s=new THREE.Mesh(new THREE.SphereGeometry(r||0.13,10,10),basic(color,0.95));
+  parent.add(s);
+  cpulses.push({m:s,c:curve,t:offset||0,sp:speed||0.4});
+}
+function region(x){var g=new THREE.Group();g.position.x=x;scene.add(g);return g;}
+function regionLabel(g,text,y){
+  var s=makeLabel(text,{size:1.5,alpha:0.9,weight:700});
+  s.position.set(0,y,0);g.add(s);
+}
+
+/* ---------- numbers as cells ---------- */
+var geoCache={};
+function cellMesh(w,h,d,color){
+  var k=w+'_'+h+'_'+d;
+  var g=geoCache[k]||(geoCache[k]=new THREE.BoxGeometry(w,h,d));
+  return new THREE.Mesh(g,new THREE.MeshLambertMaterial({color:color}));
+}
+var MAPS={
+  vec:[0x24232e,0x6a6973,0xedece4],
+  par:[0x17152b,0x4d4694,0xb9b2ff],
+  q:[0x4a2e08,0xef9f27,0xffe3b0],
+  k:[0x0b3b2b,0x17a673,0x8ff0c8],
+  v:[0x06291d,0x0f7a55,0x5fd3a6],
+  hf:[0x0b3b2b,0x2f8f6b,0xb8f0d8]
+};
+function mapColor(map,v){
+  var m=MAPS[map],o=new THREE.Color(m[1]);
+  v=clamp(v,-1,1);
+  return (v<0)?o.lerp(new THREE.Color(m[0]),-v):o.lerp(new THREE.Color(m[2]),v);
+}
+/* a vector: one cell per number, vertical by default */
+function strip(parent,vals,o){
+  var c=o.cell||0.4,g=(o.gap===undefined)?0.06:o.gap,st=c+g,n=vals.length,len=n*st-g,out=[];
+  var horiz=(o.dir==='h'),dp=o.depth||0.36;
+  for(var i=0;i<n;i++){
+    var m=cellMesh(c,c,dp,mapColor(o.map||'vec',vals[i]));
+    var off=-len/2+c/2+i*st;
+    if(horiz){m.position.set(o.x+off,o.y,o.z||0);}else{m.position.set(o.x,o.y-off,o.z||0);}
+    parent.add(m);out.push(m);
+  }
+  outline(parent,(horiz?len:c)+0.16,(horiz?c:len)+0.16,dp+0.08,o.x,o.y,o.z||0,0xedece4,0.22);
+  out.len=len;return out;
+}
+/* a matrix: rows × cols cells */
+function grid(parent,rows,cols,o){
+  var c=o.cell||0.36,g=(o.gap===undefined)?0.05:o.gap,st=c+g,W=cols*st-g,H=rows*st-g,dp=o.depth||0.18,out=[];
+  for(var i=0;i<rows;i++){
+    out[i]=[];
+    for(var j=0;j<cols;j++){
+      var m=cellMesh(c,c,dp,mapColor(o.map||'par',o.val?o.val(i,j):(rnd()*2-1)));
+      m.position.set(o.x-W/2+c/2+j*st,o.y+H/2-c/2-i*st,o.z||0);
+      parent.add(m);out[i][j]=m;
+    }
+  }
+  outline(parent,W+0.25,H+0.25,dp+0.1,o.x,o.y,o.z||0,0x8f86ff,0.45);
+  out.W=W;out.H=H;out.st=st;out.c=c;return out;
+}
+
+/* ---------- world ---------- */
+var floor=new THREE.GridHelper(420,126,0x2a2a3c,0x1a1a28);
+floor.position.set(72,-4,0);scene.add(floor);
+var rail=box(262,0.06,0.06,0x6c63d4,0.45);
+rail.position.set(72,-3.85,0);scene.add(rail);
+(function(){ /* parameter dust */
+  var N=1300,pos=new Float32Array(N*3);
+  for(var i=0;i<N;i++){
+    pos[i*3]=-64+Math.random()*272;
+    pos[i*3+1]=-5+Math.random()*24;
+    pos[i*3+2]=-34+Math.random()*68;
+  }
+  var g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  scene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0x6c63d4,size:0.16,transparent:true,opacity:0.38,depthWrite:false})));
+})();
+(function(){ /* sections */
+  [[-24,'A · ENTRENAMIENTO'],[96,'B · USO: UNA PREDICCIÓN'],[192,'C · GENERAR']].forEach(function(s){
+    var l=makeLabel(s[1],{size:2.4,weight:700,color:'#EF9F27',alpha:0.9});
+    l.position.set(s[0],18,0);scene.add(l);
+  });
+  [12,180].forEach(function(x){scene.add(beam(V(x,-4,0),V(x,19.5,0),0.05,0xef9f27,0.22));});
+  /* B2–B5 together are one transformer block */
+  scene.add(beam(V(37,15.2,0),V(131,15.2,0),0.05,0x8f86ff,0.6));
+  [37,131].forEach(function(x){scene.add(beam(V(x,14.4,0),V(x,15.2,0),0.05,0x8f86ff,0.6));});
+  var tb=makeLabel('B2 – B5 = un bloque transformer · se repite 32 veces',{size:1.1,weight:700,color:'#b9b2ff'});
+  tb.position.set(84,16.0,0);scene.add(tb);
+})();
+
+var RA1=region(-48),RA2=region(-24),RA3=region(0),
+    RB1=region(24),RB2=region(48),RB3=region(72),RB4=region(96),RB5=region(120),RB6=region(144),RB7=region(168),
+    RC1=region(192);
+
+/* A1 · tokenizador */
+(function(){
+  var rows=[['s','e','n','t','ó'],['s','en','t','ó'],['sen','t','ó'],['sent','ó'],['sentó']];
+  var fresh=[-1,1,0,0,0];
+  var rules=['caracteres sueltos','fusión 1 · e + n → en','fusión 2 · s + en → sen','fusión 3 · sen + t → sent','fusión 4 · sent + ó → sentó'];
+  var ys=[6.4,4.5,2.6,0.7,-1.2],CW=0.95,GAP=0.3;
+  rows.forEach(function(r,ri){
+    var widths=r.map(function(s){return CW*s.length;});
+    var tot=widths.reduce(function(a,b){return a+b;},0)+GAP*(r.length-1),x=-3-tot/2;
+    r.forEach(function(s,i){
+      var w=widths[i],isF=(i===fresh[ri]);
+      var b=box(w,1.1,0.8,isF?0xef9f27:0x4a4952,1);b.position.set(x+w/2,ys[ri],0);RA1.add(b);
+      edges(b,isF?0xffd27a:0x9a99a8,0.4);
+      lab(RA1,s,x+w/2,ys[ri],0.6,{size:0.75,color:isF?'#1a1206':'#EDECE4',weight:isF?700:600});
+      x+=w+GAP;
+    });
+    lab(RA1,rules[ri],1.6,ys[ri],0,{size:0.58,alpha:0.85,color:ri?'#ffd27a':'#A8A6B8',align:'left'});
+  });
+  var bar=box(17,1.5,1.3,0xef9f27,0.1);bar.position.set(0.5,ys[0],0);RA1.add(bar);
+  anims.push({
+    tick:function(t){
+      var c=(t*0.45)%5,ri=Math.floor(c),f=c-ri;
+      bar.position.y=ys[ri];
+      bar.material.opacity=0.03+0.14*Math.sin(Math.PI*f);
+    },
+    still:function(){bar.position.y=ys[4];bar.material.opacity=0.12;}
+  });
+  lab(RA1,'vocabulario final: ~128 000 tokens · cada uno con su número (ID)',0,-3,2.4,{size:0.66,alpha:0.7});
+  regionLabel(RA1,'A1 · Tokenizador (BPE)',9);
+})();
+
+/* A2 · parámetros al azar */
+(function(){
+  grid(RA2,12,5,{x:-7.8,y:3,cell:0.4});
+  lab(RA2,'E',-7.8,6.4,0,{size:0.8});
+  lab(RA2,'128 000 × 4 096',-7.8,-0.3,0,{size:0.5,alpha:0.75});
+  var L=[['W_Q',-2.4,5.1],['W_K',0.6,5.1],['W_V',3.6,5.1],['W_O',-2.4,1.3],['W_up',0.6,1.3],['W_down',3.6,1.3]];
+  L.forEach(function(m){
+    grid(RA2,5,5,{x:m[1],y:m[2],cell:0.34});
+    lab(RA2,m[0],m[1],m[2]+1.45,0,{size:0.55});
+  });
+  strip(RA2,[0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6],{x:-0.6,y:-0.2,cell:0.22,gap:0.04,dir:'h',map:'par'});
+  lab(RA2,'normalización · × 2',0.9,-0.2,0,{size:0.45,alpha:0.85,align:'left'});
+  outline(RA2,9.6,8.2,0.4,0.6,3.4,0,0x8f86ff,0.55);
+  for(var k=1;k<=3;k++){
+    var gh=box(9.6,8.2,0.05,0x3d3880,0.12);gh.position.set(0.6,3.4,-1.2*k);RA2.add(gh);edges(gh,0x8f86ff,0.28);
+  }
+  lab(RA2,'capa ℓ · × 32 capas',0.6,8.1,0,{size:0.6,color:'#ffd27a'});
+  grid(RA2,5,8,{x:8.7,y:3,cell:0.34});
+  lab(RA2,'W_U',8.7,4.6,0,{size:0.6});
+  lab(RA2,'4 096 × 128 000',8.7,1.4,0,{size:0.5,alpha:0.75});
+  lab(RA2,'≈ 8 000 millones de números · las matrices, aleatorias al empezar',0.5,-2.5,2,{size:0.66,alpha:0.7});
+  regionLabel(RA2,'A2 · Parámetros al azar',10.2);
+})();
+
+/* A3 · bucle de entrenamiento */
+(function(){
+  var R=5.8,cy=3.4,pts=[];
+  for(var i=0;i<36;i++){
+    var a=Math.PI/2-i/36*Math.PI*2;
+    pts.push(V(Math.cos(a)*R,cy+Math.sin(a)*R,0));
+  }
+  var ring=new THREE.CatmullRomCurve3(pts,true);
+  RA3.add(new THREE.Mesh(new THREE.TubeGeometry(ring,90,0.05,8,true),basic(0x8f86ff,0.5)));
+  var names=['1 · texto real del corpus','2 · predecir (toda la parte B)','3 · error = −log p(token real)','4 · backprop: gradiente de cada número','5 · w ← w − η · gradiente'];
+  var stations=[];
+  for(var s=0;s<5;s++){
+    var an=Math.PI/2-s*2*Math.PI/5,ca=Math.cos(an),sa=Math.sin(an);
+    var px=ca*R,py=cy+sa*R;
+    var st=new THREE.Mesh(new THREE.SphereGeometry(0.32,14,14),basic(0x8f86ff,0.95));
+    st.position.set(px,py,0);RA3.add(st);stations.push(st);
+    var side=(Math.abs(ca)<0.2)?null:(ca>0?'left':'right');
+    lab(RA3,names[s],px+ca*0.75,py+sa*0.75+(side?0:0.25),0,{size:0.56,alpha:0.92,align:side});
+  }
+  var from=[],to=[],cells=[];
+  var M=grid(RA3,7,7,{x:0,y:4.3,cell:0.38,val:function(){return 0;}});
+  for(var r=0;r<7;r++){for(var c=0;c<7;c++){
+    cells.push(M[r][c]);
+    from.push(mapColor('par',rnd()*2-1));
+    to.push(mapColor('par',Math.sin(r*0.9)*Math.cos(c*0.7+r*0.3)));
+  }}
+  var loss=function(u){return -1.1+1.7*Math.exp(-3.5*u)+0.07*Math.sin(u*37);};
+  var lp=[];
+  for(var u=0;u<=40;u++){lp.push(V(-2.2+4.4*u/40,loss(u/40),0));}
+  RA3.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(lp),new THREE.LineBasicMaterial({color:0xb9b7c8,transparent:true,opacity:0.75})));
+  RA3.add(beam(V(-2.3,-1.25,0),V(2.4,-1.25,0),0.02,0x8a8a82,0.5));
+  lab(RA3,'error',-2.5,0.4,0,{size:0.45,alpha:0.75,align:'right'});
+  var ldot=new THREE.Mesh(new THREE.SphereGeometry(0.13,10,10),basic(0xef9f27,0.95));RA3.add(ldot);
+  var rdot=new THREE.Mesh(new THREE.SphereGeometry(0.2,12,12),basic(0xffd27a,0.95));RA3.add(rdot);
+  function place(sv,rt){
+    var k=ease(sv);
+    for(var i=0;i<cells.length;i++){cells[i].material.color.copy(from[i]).lerp(to[i],k);}
+    ldot.position.set(-2.2+4.4*sv,loss(sv),0.1);
+    rdot.position.copy(ring.getPoint(rt));
+    var act=Math.floor(rt*5)%5;
+    stations.forEach(function(m,j){m.material.color.setHex(j===act?0xef9f27:0x8f86ff);});
+  }
+  anims.push({
+    tick:function(t){place(clamp(((t*0.06)%1)/0.85,0,1),(t*0.3)%1);},
+    still:function(){place(1,0.5);}
+  });
+  lab(RA3,'se repite miles de millones de veces · al final los números se congelan',0,-3.2,2.2,{size:0.64,alpha:0.7});
+  regionLabel(RA3,'A3 · Bucle de entrenamiento',11.6);
+})();
+
+/* B1 · tokenizar y copiar filas de E */
+(function(){
+  var E=grid(RB1,14,6,{x:-8.6,y:3.2,cell:0.36});
+  lab(RB1,'E',-8.6,6.8,0,{size:0.8});
+  lab(RB1,'128 000 filas',-8.6,-0.1,0,{size:0.48,alpha:0.75});
+  var sel=[2,5,8,10,12],xs=[-3.6,-0.6,2.4,5.4,8.4],ids=['ID 301','ID 21 885','ID 8 112','ID 513','ID 47 090'];
+  var ex=-8.6+E.W/2+0.15;
+  for(var i=0;i<5;i++){
+    var ry=3.2+E.H/2-E.c/2-sel[i]*E.st;
+    var hl=box(E.W+0.3,0.44,0.36,0xef9f27,0.3);hl.position.set(-8.6,ry,0);RB1.add(hl);
+    var tb=box(2.4,1,0.9,i===4?0xef9f27:0x4a4952,1);tb.position.set(xs[i],-2.2,0);RB1.add(tb);
+    edges(tb,i===4?0xffd27a:0x9a99a8,0.4);
+    lab(RB1,WORDS[i],xs[i],-2.2,0.6,{size:0.75,color:i===4?'#1a1206':'#EDECE4',weight:i===4?700:600});
+    lab(RB1,ids[i],xs[i],-3.15,0.5,{size:0.46,alpha:0.75});
+    strip(RB1,randVals(8),{x:xs[i],y:2.6,cell:0.4});
+    lab(RB1,'h₀',xs[i],5.0,0,{size:0.7});
+    RB1.add(beam(V(ex,ry,0),V(xs[i]-0.35,0.75,0),0.03,0xef9f27,0.32));
+    addPulse(RB1,V(ex,ry,0),V(xs[i]-0.35,0.75,0),0xffd27a,0.4,i*0.2,0.11);
+  }
+  lab(RB1,'h₀ de «sentó»: 0,12  −0,85  0,33  …  0,07   (4 096 números)',2.4,6.1,0,{size:0.5,alpha:0.85});
+  lab(RB1,'copiar la fila de cada ID · sin cálculo · IDs de ejemplo',1,-4.1,2.5,{size:0.6,alpha:0.7});
+  regionLabel(RB1,'B1 · Tokenizar y copiar filas de E',8.6);
+})();
+
+/* B2 · proyecciones q, k, v */
+(function(){
+  strip(RB2,randVals(10),{x:-8.4,y:3,cell:0.4});
+  lab(RB2,'h',-8.4,5.9,0,{size:0.9,serif:true});
+  lab(RB2,'4 096',-8.4,0.15,0,{size:0.48,alpha:0.75});
+  var ys=[6.6,3,-0.6],names=['W_Q','W_K','W_V'],maps=['q','k','v'],
+      outN=['q · 128 números','k · 128 → caché KV','v · 128 → caché KV'],
+      outC=['#ffd27a','#5fd3a6','#5fd3a6'],pc=[0xffd27a,0x5fd3a6,0x5fd3a6],bc=[0xef9f27,0x17a673,0x0f7a55];
+  for(var i=0;i<3;i++){
+    var y=ys[i];
+    grid(RB2,10,4,{x:-1.6,y:y,cell:0.27,gap:0.04});
+    lab(RB2,names[i],-3.7,y+(i===2?-1.05:1.05),0,{size:0.6});
+    strip(RB2,randVals(4),{x:3.6,y:y,cell:0.4,map:maps[i]});
+    lab(RB2,outN[i],4.3,y,0,{size:0.56,color:outC[i],align:'left'});
+    RB2.add(beam(V(-8.0,3,0),V(-2.4,y,0),0.045,0x8a8a82,0.4));
+    RB2.add(beam(V(-0.85,y,0),V(3.3,y,0),0.045,bc[i],0.55));
+    addPulse(RB2,V(-8.0,3,0),V(-2.4,y,0),0xedece4,0.5,i*0.18,0.12);
+    addPulse(RB2,V(-0.85,y,0),V(3.3,y,0),pc[i],0.5,0.5+i*0.18,0.12);
+  }
+  lab(RB2,'q = h · W_Q      k = h · W_K      v = h · W_V      (cada W: 4 096 × 128)',0,9.3,0,{size:0.6,alpha:0.9});
+  lab(RB2,'para cada token · en cada capa · en cada una de las 32 cabezas',0,-3.2,2.2,{size:0.62,alpha:0.7});
+  regionLabel(RB2,'B2 · Atención: proyecciones q, k, v',10.8);
+})();
+
+/* B3 · puntuaciones, máscara y softmax */
+(function(){
+  var wts=[[1],[0.3,0.7],[0.2,0.5,0.3],[0.15,0.3,0.15,0.4],[0.081,0.441,0.133,0.198,0.147]];
+  var sc=['0,4','2,1','0,9','1,3','1,0'];
+  var cx=[-7.2,-5.6,-4.0,-2.4,-0.8],ry=[5.6,4.4,3.2,2.0,0.8];
+  var dark=new THREE.Color(0x2a2840),amb=new THREE.Color(0xef9f27);
+  for(var i=0;i<5;i++){
+    for(var j=0;j<5;j++){
+      var masked=(j>i),w=masked?0:wts[i][j];
+      var col=masked?new THREE.Color(0x16161f):dark.clone().lerp(amb,Math.pow(w,0.6));
+      var b=new THREE.Mesh(new THREE.BoxGeometry(1.45,1.05,0.5),new THREE.MeshLambertMaterial({color:col}));
+      b.position.set(cx[j],ry[i],0);RB3.add(b);
+      edges(b,masked?0x3a3a4a:(i===4?0xffd27a:0x9a99a8),masked?0.5:0.35);
+      if(masked){lab(RB3,'−∞',cx[j],ry[i],0.35,{size:0.42,color:'#8A8A82',alpha:0.6});}
+      else if(i===4){lab(RB3,sc[j],cx[j],ry[i],0.35,{size:0.5,color:w>0.3?'#1a1206':'#EDECE4',weight:700});}
+    }
+    lab(RB3,WORDS[i],-8.25,ry[i],0,{size:0.52,alpha:0.9,align:'right'});
+    lab(RB3,WORDS[i],cx[i],6.55,0,{size:0.5,alpha:0.9});
+  }
+  outline(RB3,8.3,1.3,0.7,-4.0,0.8,0,0xef9f27,0.85);
+  lab(RB3,'filas: q de cada token · columnas: k de cada token',-4,7.5,0,{size:0.52,alpha:0.8});
+  lab(RB3,'puntuación = q · k / √128',-4,8.8,0,{size:0.7,color:'#ffd27a'});
+  lab(RB3,'columna posterior a la fila → −∞ (máscara causal)',-4,-0.55,0,{size:0.5,alpha:0.75});
+  var bars=[];
+  for(var k=0;k<5;k++){
+    var h=wts[4][k]*8,x=2.4+k*1.25;
+    var bar=box(0.85,1,0.6,0xef9f27,0.92);bar.position.set(x,0.3+h/2,0);RB3.add(bar);
+    bars.push({m:bar,h:h});
+    lab(RB3,WORDS[k],x,-0.2,0,{size:0.44,alpha:0.85});
+    lab(RB3,fmt(wts[4][k]),x,0.3+h+0.35,0,{size:0.44,color:'#ffd27a'});
+  }
+  lab(RB3,'softmax de la fila «sentó» · suman 1',4.9,5.3,0,{size:0.52,alpha:0.9});
+  RB3.add(beam(V(0,0.8,0),V(1.8,0.8,0),0.04,0xef9f27,0.5));
+  addPulse(RB3,V(0,0.8,0),V(1.8,0.8,0),0xffd27a,0.6,0,0.11);
+  function grow(s){bars.forEach(function(b){b.m.scale.y=Math.max(0.001,s*b.h);b.m.position.y=0.3+s*b.h/2;});}
+  anims.push({
+    tick:function(t){grow(ease(clamp(((t*0.18)%1)/0.35,0,1)));},
+    still:function(){grow(1);}
+  });
+  regionLabel(RB3,'B3 · Atención: puntuaciones y softmax',10.4);
+})();
+
+/* B4 · suma ponderada, W_O y h + Δ */
+(function(){
+  var wts=[0.08,0.44,0.13,0.20,0.15],vy=[6.4,5.0,3.6,2.2,0.8];
+  for(var i=0;i<5;i++){
+    strip(RB4,randVals(4),{x:-7.6,y:vy[i],cell:0.36,dir:'h',map:'v'});
+    lab(RB4,fmt(wts[i])+' × v('+WORDS[i]+')',-8.75,vy[i],0,{size:0.48,alpha:0.9,align:'right',color:i===1?'#ffd27a':'#EDECE4'});
+    RB4.add(beam(V(-6.7,vy[i],0),V(-3.95,3.6,0),0.02+wts[i]*0.12,0x5fd3a6,0.2+wts[i]*1.4));
+    addPulse(RB4,V(-6.7,vy[i],0),V(-3.95,3.6,0),0x5fd3a6,0.25+wts[i]*0.9,i*0.17,0.08+wts[i]*0.2);
+  }
+  strip(RB4,randVals(4),{x:-3.6,y:3.6,cell:0.36,map:'v'});
+  lab(RB4,'o',-3.6,5.0,0,{size:0.8,serif:true});
+  lab(RB4,'128',-3.6,2.2,0,{size:0.44,alpha:0.75});
+  grid(RB4,10,4,{x:-1.0,y:3.6,cell:0.27,gap:0.04});
+  lab(RB4,'W_O',-1.0,5.75,0,{size:0.6});
+  RB4.add(beam(V(-3.3,3.6,0),V(-1.75,3.6,0),0.04,0x5fd3a6,0.5));
+  RB4.add(beam(V(-0.25,3.6,0),V(1.45,3.6,0),0.04,0xef9f27,0.55));
+  addPulse(RB4,V(-0.25,3.6,0),V(1.45,3.6,0),0xffd27a,0.5,0.3,0.11);
+  var hv=randVals(10),dv=randVals(10,0.6);
+  strip(RB4,dv,{x:1.8,y:3.6,cell:0.34,map:'q'});
+  lab(RB4,'Δ',1.8,6.3,0,{size:0.85,color:'#ffd27a'});
+  lab(RB4,'+',3.2,3.6,0.3,{size:1.1,weight:700,color:'#ffd27a'});
+  strip(RB4,hv,{x:4.6,y:3.6,cell:0.34});
+  lab(RB4,'h',4.6,6.3,0,{size:0.85,serif:true});
+  lab(RB4,'=',6.0,3.6,0.3,{size:1.1,weight:700});
+  strip(RB4,hv.map(function(v,i){return v+dv[i];}),{x:7.4,y:3.6,cell:0.34});
+  lab(RB4,'h′',7.4,6.3,0,{size:0.85,serif:true});
+  lab(RB4,'Δ = suma de las 32 cabezas',1.8,1.0,0.4,{size:0.44,color:'#ffd27a'});
+  for(var k=1;k<=3;k++){
+    var gh=box(13,7.4,0.04,0x3d3880,0.1);gh.position.set(-4.6,3.6,-1.3*k);RB4.add(gh);edges(gh,0x8f86ff,0.28);
+  }
+  lab(RB4,'cabezas 2 … 32: el mismo cálculo con sus trozos de columnas',-4.6,8.2,-1.3,{size:0.52,alpha:0.8});
+  lab(RB4,'cabeza = trozo de 128 columnas de W_Q, W_K y W_V · con su propio softmax',1.5,9.1,0,{size:0.55,color:'#ffd27a'});
+  /* three heads, three different weightings of the same row */
+  var hw=[[3,[0.05,0.06,0.08,0.75,0.06]],[11,[0.06,0.70,0.10,0.07,0.07]],[24,[0.80,0.05,0.05,0.05,0.05]]];
+  hw.forEach(function(hd,n){
+    var by=5.9-n*2.65;
+    lab(RB4,'cabeza '+hd[0],11.6,by+2.2,0,{size:0.5,alpha:0.9});
+    RB4.add(beam(V(9.75,by,0),V(13.5,by,0),0.015,0x8a8a82,0.5));
+    hd[1].forEach(function(w,j){
+      var bh=Math.max(0.04,w*2.4),b=box(0.5,bh,0.3,0xef9f27,0.92);
+      b.position.set(10.1+j*0.75,by+bh/2,0);RB4.add(b);
+    });
+  });
+  WORDS.forEach(function(wd,j){
+    var tl=makeLabel(wd,{size:0.4,alpha:0.85});tl.position.set(10.1+j*0.75,0.25,0);RB4.add(tl);
+  });
+  lab(RB4,'cada fila suma 1',11.6,-0.4,0,{size:0.44,alpha:0.75});
+  lab(RB4,'resultado de la atención: h ← h + Δ  (se suma, no se reemplaza)',0,-1.6,2,{size:0.62,alpha:0.7});
+  regionLabel(RB4,'B4 · Atención: cabezas, suma ponderada y h + Δ',10.2);
+})();
+
+/* B5 · MLP */
+(function(){
+  var cy=3,hv=randVals(6),a=randVals(18),dv=randVals(6,0.6);
+  strip(RB5,hv,{x:-9.2,y:cy,cell:0.42});
+  lab(RB5,'h',-9.2,5.0,0,{size:0.85,serif:true});
+  lab(RB5,'4 096',-9.2,1.0,0,{size:0.44,alpha:0.75});
+  grid(RB5,18,6,{x:-6.6,y:cy,cell:0.26,gap:0.04});
+  lab(RB5,'W_up',-6.6,6.3,0,{size:0.56});
+  strip(RB5,a,{x:-4.0,y:cy,cell:0.26,gap:0.04});
+  lab(RB5,'a',-4.0,6.3,0,{size:0.8,serif:true});
+  lab(RB5,'14 336',-4.0,-0.25,0,{size:0.44,alpha:0.75});
+  strip(RB5,a.map(function(v){return v>0?v:-0.95;}),{x:-2.2,y:cy,cell:0.26,gap:0.04});
+  lab(RB5,'f(a)',-2.2,6.3,0,{size:0.7,serif:true});
+  grid(RB5,18,6,{x:0.4,y:cy,cell:0.26,gap:0.04});
+  lab(RB5,'W_down',0.4,6.3,0,{size:0.56});
+  strip(RB5,dv,{x:3.0,y:cy,cell:0.42,map:'q'});
+  lab(RB5,'Δ',3.0,5.0,0,{size:0.85,color:'#ffd27a'});
+  lab(RB5,'+',4.3,cy,0.3,{size:1.1,weight:700,color:'#ffd27a'});
+  strip(RB5,hv,{x:5.6,y:cy,cell:0.42});
+  lab(RB5,'h',5.6,5.0,0,{size:0.85,serif:true});
+  lab(RB5,'=',6.9,cy,0.3,{size:1.1,weight:700});
+  strip(RB5,hv.map(function(v,i){return v+dv[i];}),{x:8.2,y:cy,cell:0.42});
+  lab(RB5,'h′',8.2,5.0,0,{size:0.85,serif:true});
+  [[-8.9,-7.6,0xedece4],[-5.65,-4.25,0xedece4],[-3.8,-2.4,0xedece4],[-2.0,-0.55,0xedece4],[1.35,2.7,0xffd27a]].forEach(function(s,i){
+    RB5.add(beam(V(s[0],cy,0),V(s[1],cy,0),0.04,s[2],0.45));
+    addPulse(RB5,V(s[0],cy,0),V(s[1],cy,0),s[2],0.6,i*0.2,0.11);
+  });
+  lab(RB5,'f: función no lineal aplicada número a número (p. ej. SiLU)',-3.1,-1.1,0,{size:0.48,alpha:0.75});
+  lab(RB5,'cada token por separado · no mira a los demás · h ← h + Δ',0,-2.4,2,{size:0.62,alpha:0.7});
+  regionLabel(RB5,'B5 · MLP',9);
+})();
+
+/* B6 · 32 capas y caché KV */
+(function(){
+  var xs=[-8,-4,0,4,8],ys=[-0.4,1.8,4.0,7.4],names=['capa 1','capa 2','capa 3','capa 32'];
+  var cG=new THREE.Color(0x8a8a82),cT=new THREE.Color(0x17a673);
+  for(var c0=0;c0<5;c0++){
+    var e=box(1.5,0.8,0.8,0x8a8a82,1);e.position.set(xs[c0],-2.3,0);RB6.add(e);edges(e,0xffffff,0.2);
+    lab(RB6,WORDS[c0],xs[c0],-3.25,0,{size:0.55,alpha:0.9});
+  }
+  lab(RB6,'h₀ (embedding)',-10.4,-2.3,0,{size:0.5,alpha:0.85,align:'right'});
+  for(var r=0;r<4;r++){
+    var slab=box(20,0.16,2.6,0x3d3880,0.45);slab.position.set(0,ys[r]-0.62,-0.4);RB6.add(slab);edges(slab,0x8f86ff,0.3);
+    lab(RB6,names[r],-10.4,ys[r],0,{size:0.5,alpha:0.85,align:'right'});
+    var col=cG.clone().lerp(cT,(r+1)/4);
+    for(var c=0;c<5;c++){
+      var cell=box(1.5,0.8,0.8,col.getHex(),1);cell.position.set(xs[c],ys[r],0);RB6.add(cell);edges(cell,0xffffff,0.2);
+      var kc=box(0.36,0.36,0.36,0x17a673,1);kc.position.set(xs[c]-0.22,ys[r],-0.8);RB6.add(kc);
+      var vc=box(0.36,0.36,0.36,0x0f7a55,1);vc.position.set(xs[c]+0.22,ys[r],-0.8);RB6.add(vc);
+    }
+  }
+  lab(RB6,'⋮',0,5.7,0,{size:1.1});
+  lab(RB6,'⋮',-11.4,5.7,0,{size:1.1,alpha:0.7});
+  var wts=[0.08,0.44,0.13,0.20];
+  for(var j=0;j<4;j++){
+    var curve=new THREE.QuadraticBezierCurve3(V(8,4.4,0.3),V((8+xs[j])/2,5.0+(8-xs[j])*0.08,1.4),V(xs[j],4.4,0.3));
+    RB6.add(new THREE.Mesh(new THREE.TubeGeometry(curve,24,0.03+wts[j]*0.12,8,false),basic(0xef9f27,0.2+wts[j]*1.5)));
+    addCPulse(RB6,curve,0xffe9c2,0.25+wts[j]*0.8,j*0.22,0.08+wts[j]*0.16);
+  }
+  var dot=new THREE.Mesh(new THREE.SphereGeometry(0.2,12,12),basic(0xedece4,0.95));dot.position.set(8,-2.3,0.6);RB6.add(dot);
+  anims.push({
+    tick:function(t){dot.position.y=-2.3+10.4*((t*0.14)%1);},
+    still:function(){dot.position.y=4.0;}
+  });
+  var hy=[-2.3,-0.4,1.8,4.0];
+  for(var a=0;a<3;a++){
+    var y0=hy[a]+0.45,y1=hy[a+1]-0.5;
+    RB6.add(beam(V(10.7,y0,0),V(10.7,y1,0),0.05,0xef9f27,0.85));
+    var tip=new THREE.Mesh(new THREE.ConeGeometry(0.2,0.4,10),basic(0xef9f27,0.95));tip.position.set(10.7,y1+0.15,0);RB6.add(tip);
+    lab(RB6,'h',11.25,(y0+y1)/2,0,{size:0.5,color:'#ffd27a'});
+  }
+  lab(RB6,'a la capa siguiente solo sube h · q, k, v se recalculan en cada capa con sus W_Q, W_K, W_V',0,-5.1,3,{size:0.55,color:'#ffd27a'});
+  lab(RB6,'cubos verdes detrás: k · v de esa capa (caché KV) · solo los reusa esa capa',-4,9.1,0,{size:0.52,color:'#5fd3a6'});
+  lab(RB6,'cada fila = un bloque transformer (atención + MLP)',6,9.1,0,{size:0.52,color:'#b9b2ff'});
+  lab(RB6,'todos los tokens a la vez · cada capa con sus propias matrices',0,-4.2,3,{size:0.6,alpha:0.7});
+  regionLabel(RB6,'B6 · 32 capas y caché KV',10.6);
+})();
+
+/* B7 · salida */
+(function(){
+  strip(RB7,randVals(8),{x:-9.2,y:3,cell:0.4,map:'hf'});
+  lab(RB7,'h final de «sentó»',-9.2,5.4,0,{size:0.5,alpha:0.9});
+  grid(RB7,8,10,{x:-5.2,y:3,cell:0.32});
+  lab(RB7,'W_U · 4 096 × 128 000',-5.2,5.2,0,{size:0.5});
+  RB7.add(beam(V(-8.85,3,0),V(-7.15,3,0),0.04,0x2f8f6b,0.55));
+  RB7.add(beam(V(-3.25,3,0),V(0.1,5.2,0),0.04,0x8a8a82,0.5));
+  addPulse(RB7,V(-8.85,3,0),V(-7.15,3,0),0xb8f0d8,0.5,0,0.11);
+  addPulse(RB7,V(-3.25,3,0),V(0.1,5.2,0),0xedece4,0.5,0.4,0.11);
+  var toks=['en','sobre','a','junto','y','.',',','allí','de','con'];
+  var probs=[0.41,0.22,0.09,0.07,0.05,0.04,0.03,0.03,0.02,0.02];
+  var logits=[7.1,6.5,5.6,5.3,5.0,4.8,4.5,4.5,4.1,4.1];
+  for(var j=0;j<10;j++){
+    var x=0.6+j*0.92;
+    var lh=(logits[j]-3)*0.6;
+    var lb=box(0.62,lh,0.5,0x8a8a82,1);lb.position.set(x,4.6+lh/2,0);RB7.add(lb);
+    var ph=probs[j]*7;
+    var pb=box(0.62,ph,0.5,j===0?0xef9f27:0x6a6973,1);pb.position.set(x,-0.6+ph/2,0);RB7.add(pb);
+    lab(RB7,fmt(probs[j]),x,-0.6+ph+0.3,0,{size:0.36,color:j===0?'#ffd27a':'#B9B7C8'});
+    lab(RB7,toks[j],x,-1.1,0,{size:0.46,alpha:0.9,color:j===0?'#ffd27a':'#EDECE4'});
+  }
+  lab(RB7,'logits',0.05,5.6,0,{size:0.5,alpha:0.85,align:'right'});
+  lab(RB7,'probabilidades',0.05,0.6,0,{size:0.5,alpha:0.85,align:'right'});
+  lab(RB7,'softmax ↓',4.7,4.05,0,{size:0.5,alpha:0.85});
+  var pick=box(0.9,3.5,0.8,0xef9f27,0.15);pick.position.set(0.6,0.9,0);RB7.add(pick);edges(pick,0xffd27a,0.6);
+  anims.push({
+    tick:function(t){pick.material.opacity=0.05+0.2*(0.5+0.5*Math.sin(t*3));},
+    still:function(){pick.material.opacity=0.18;}
+  });
+  lab(RB7,'muestreo → «en»',0.1,-1.95,0,{size:0.56,color:'#ffd27a',align:'left'});
+  lab(RB7,'+ otros ~128 000 tokens con probabilidad casi nula',4.7,-2.75,0,{size:0.44,alpha:0.7});
+  regionLabel(RB7,'B7 · Salida: logits, softmax, muestreo',9.2);
+})();
+
+/* C · generar */
+(function(){
+  var xs=[-9,-6,-3,0,3],nx=6.4,ys=[0,2,4,6],names=['capa 1','capa 2','capa 3','capa 32'];
+  for(var r=0;r<4;r++){
+    lab(RC1,names[r],-10.4,ys[r],0,{size:0.48,alpha:0.85,align:'right'});
+    for(var c=0;c<5;c++){
+      var k=box(0.55,0.55,0.55,0x17a673,1);k.position.set(xs[c]-0.33,ys[r],0);RC1.add(k);edges(k,0x5fd3a6,0.3);
+      var v=box(0.55,0.55,0.55,0x0f7a55,1);v.position.set(xs[c]+0.33,ys[r],0);RC1.add(v);edges(v,0x5fd3a6,0.2);
+    }
+  }
+  for(var c1=0;c1<5;c1++){lab(RC1,WORDS[c1],xs[c1],-1.3,0,{size:0.52,alpha:0.85});}
+  lab(RC1,'en',nx,-1.3,0,{size:0.6,color:'#ffd27a',weight:700});
+  var cells=[],kvs=[],arcs=[];
+  for(var r2=0;r2<4;r2++){
+    var cl=box(1.3,0.8,0.8,0x4a4952,1);cl.position.set(nx,ys[r2],0);RC1.add(cl);edges(cl,0x9a99a8,0.3);cells.push(cl);
+    var kv=new THREE.Group();kv.position.set(nx,ys[r2],-0.9);RC1.add(kv);
+    var k2=box(0.45,0.45,0.45,0x17a673,1);k2.position.x=-0.27;kv.add(k2);
+    var v2=box(0.45,0.45,0.45,0x0f7a55,1);v2.position.x=0.27;kv.add(v2);
+    kvs.push(kv);
+    arcs[r2]=[];
+    for(var c2=0;c2<5;c2++){
+      var curve=new THREE.QuadraticBezierCurve3(V(nx-0.7,ys[r2]+0.2,0.3),V((nx+xs[c2])/2,ys[r2]+0.9+(nx-xs[c2])*0.05,1.3),V(xs[c2],ys[r2]+0.35,0.3));
+      var tube=new THREE.Mesh(new THREE.TubeGeometry(curve,20,0.035,8,false),basic(0xef9f27,0));
+      RC1.add(tube);arcs[r2].push(tube);
+    }
+  }
+  var board=box(2.6,1.2,0.3,0x221f3a,0.95);board.position.set(9.6,8.8,0);RC1.add(board);edges(board,0x8f86ff,0.5);
+  lab(RC1,'muestreo',9.6,8.8,0.3,{size:0.5});
+  var up=new THREE.QuadraticBezierCurve3(V(nx,6.5,0),V(nx+0.4,8.8,0),V(8.3,8.8,0));
+  var down=new THREE.QuadraticBezierCurve3(V(10.9,8.6,0),V(12.2,4,0),V(10.2,-0.5,0));
+  RC1.add(new THREE.Mesh(new THREE.TubeGeometry(up,20,0.04,8,false),basic(0xedece4,0.4)));
+  RC1.add(new THREE.Mesh(new THREE.TubeGeometry(down,20,0.04,8,false),basic(0x8a8a82,0.4)));
+  for(var r3=0;r3<4;r3++){outline(RC1,1.3,0.8,0.8,10.2,ys[r3],0,0x9a99a8,0.22);}
+  lab(RC1,'t7 = ?',10.2,-1.3,0,{size:0.5,alpha:0.75});
+  var dot=new THREE.Mesh(new THREE.SphereGeometry(0.2,12,12),basic(0xef9f27,0.95));RC1.add(dot);
+  function place(cyc){
+    var y=-0.8+6.8*clamp(cyc/0.7,0,1);
+    if(cyc<0.7){dot.position.set(nx,y,0.6);dot.material.color.setHex(0xef9f27);}
+    else if(cyc<0.85){dot.position.copy(up.getPoint((cyc-0.7)/0.15));dot.material.color.setHex(0xedece4);}
+    else{dot.position.copy(down.getPoint((cyc-0.85)/0.15));dot.material.color.setHex(0x8a8a82);}
+    for(var r=0;r<4;r++){
+      var done=(cyc>=0.7)||(y>ys[r]+0.3);
+      cells[r].material.color.setHex(done?0x2f8f6b:0x4a4952);
+      kvs[r].scale.setScalar(done?1:0.01);
+      var op=(cyc<0.7)?Math.max(0,1-Math.abs(y-ys[r])/0.9)*0.8:0;
+      for(var c=0;c<5;c++){arcs[r][c].material.opacity=op;}
+    }
+  }
+  anims.push({
+    tick:function(t){place((t*0.11)%1);},
+    still:function(){place(0.49);}
+  });
+  lab(RC1,'el token nuevo compara su q con los k guardados de su capa',-3,8.4,0,{size:0.52,alpha:0.9});
+  lab(RC1,'caché KV de los tokens anteriores: no se recalcula',-3,-2.3,0,{size:0.5,color:'#5fd3a6'});
+  lab(RC1,'se repite hasta un token de fin o un límite de longitud',0,-3.3,2,{size:0.62,alpha:0.7});
+  regionLabel(RC1,'C · Generar token a token',10.6);
+})();
+
+
+/* ---------- steps ---------- */
+var STEPS=[
+ {e:'VISTA GENERAL',t:'El algoritmo, sin metáforas',
+  g:'Un LLM es un conjunto de matrices de números y un procedimiento fijo para multiplicarlas. Hay dos fases: entrenar (ajustar esos números) y usar (aplicarlos para calcular el siguiente token).',
+  d:'A la izquierda, el entrenamiento (A). En el centro, una predicción completa, operación a operación (B): esa parte es un transformer, la arquitectura de todos los LLM actuales: embedding, 32 bloques iguales (atención + MLP, de B2 a B5) y salida. A la derecha, cómo se encadenan predicciones para generar texto (C). Dimensiones de ejemplo: un modelo de ~8 000 millones de parámetros, con vectores de 4 096 números, 32 capas y 32 cabezas.',
+  target:[94,3,0],off:[0,38,235]},
+ {e:'A · ENTRENAMIENTO · 1 / 3',t:'Tokenizador: fusiones por frecuencia',
+  g:'Antes de entrenar se fija el vocabulario. El algoritmo BPE parte de caracteres sueltos, busca en un corpus enorme el par contiguo más frecuente, lo fusiona en un símbolo nuevo y repite decenas de miles de veces. El resultado es una lista fija de unos 128 000 tokens, cada uno con un número (ID).',
+  d:'Cada fila es una fusión aplicada a «sentó»; la caja ámbar es el símbolo recién creado. Esta fase solo cuenta frecuencias: no aprende significado y no cambia después. El ejemplo es ilustrativo: según el vocabulario, una palabra queda en uno o en varios tokens.',
+  target:[-46,2.6,0],off:[1,3,22]},
+ {e:'A · ENTRENAMIENTO · 2 / 3',t:'Todas las matrices empiezan al azar',
+  g:'Se crean todos los parámetros con su tamaño definitivo: la tabla de embeddings E (una fila por token); en cada una de las 32 capas, las matrices de atención (W_Q, W_K, W_V, W_O), las del MLP (W_up, W_down) y dos vectores de normalización de 4 096 números; y la matriz de salida W_U. Las matrices empiezan con valores aleatorios pequeños; los pesos de normalización, a 1.',
+  d:'Cada celda es un número y su color, el valor. En total, unos 8 000 millones de números. En este momento el modelo calcula distribuciones sin sentido: todos los tokens son casi igual de probables. Durante el entrenamiento, backpropagation ajusta todos estos parámetros en cada paso, cada capa con su propia corrección. De E solo cambian las filas de los tokens que aparecían en el texto de ese paso. En algunos modelos W_U y E son la misma matriz.',
+  target:[-23.5,3.6,0],off:[1,3,23]},
+ {e:'A · ENTRENAMIENTO · 3 / 3',t:'El bucle: predecir, medir el error, corregir',
+  g:'Se toma un fragmento de texto real y el modelo calcula, en cada posición, la probabilidad de cada token como siguiente (todo lo de la parte B). El error es −log de la probabilidad asignada al token que realmente venía. Backpropagation calcula el gradiente de cada número: cuánto cambia el error si ese número sube un poco. Cada número se mueve un paso pequeño (η) en sentido contrario.',
+  d:'El punto recorre los cinco pasos del ciclo. En el centro, una matriz pasa de ruido a estructura mientras la curva de error baja. El ciclo se repite miles de millones de veces sobre billones de tokens. Al terminar, los números se congelan: eso es el modelo. Nadie fija a mano qué hace cada matriz.',
+  target:[0,3.8,0],off:[0,2,28]},
+ {e:'B · UNA PREDICCIÓN · 1 / 7',t:'Tokenizar y copiar filas de E',
+  g:'Desde aquí, el modelo ya entrenado. El tokenizador convierte el texto en una lista de IDs. Para cada ID se copia su fila de la tabla E: un vector de 4 096 números, h₀. No hay ningún cálculo, solo una consulta.',
+  d:'Cinco tokens, cinco filas resaltadas, cinco vectores h₀ (cada celda es un número; aquí se ven 8 de 4 096). Cada h₀ depende solo de su token: «sentó» recibe el mismo vector en cualquier frase. La información del contexto se añade en las capas.',
+  target:[24,1.8,0],off:[1,3,24]},
+ {e:'B · UNA PREDICCIÓN · 2 / 7',t:'Atención (1): proyecciones q, k y v',
+  g:'Primera operación de cada capa, después de normalizar h. Para cada token y cada cabeza, h se multiplica por tres matrices de 4 096 × 128. Salen tres vectores de 128 números: q, k y v.',
+  d:'Aquí, para el h de «sentó». Las tres multiplicaciones usan el mismo h y matrices distintas. q solo se usa en este token y en esta capa; k y v se guardan en la caché KV, porque los tokens posteriores los necesitarán.',
+  target:[48.5,3.4,0],off:[1,2.5,25]},
+ {e:'B · UNA PREDICCIÓN · 3 / 7',t:'Atención (2): puntuaciones, máscara y softmax',
+  g:'Para cada par de tokens (i, j) se calcula el producto escalar q_i · k_j, dividido por √128. Si j es posterior a i, la puntuación se pone a −∞: es la máscara causal. Después, softmax fila a fila: cada fila se convierte en pesos positivos que suman 1.',
+  d:'Filas: el token cuyo q se usa. Columnas: el token cuyo k se usa. La fila de «sentó» muestra sus puntuaciones; a la derecha, sus pesos tras el softmax, con 0,44 para «gato». Los −∞ de arriba a la derecha dan peso 0.',
+  target:[71,3.6,0],off:[0,2,25]},
+ {e:'B · UNA PREDICCIÓN · 4 / 7',t:'Atención (3): cabezas, suma ponderada y h + Δ',
+  g:'La atención se calcula en 32 trozos independientes, llamados cabezas: las columnas 1–128 de W_Q, W_K y W_V son la cabeza 1, las 129–256 la cabeza 2, y así hasta la 32. Cada cabeza hace su propio q·k y su propio softmax, así que cada token obtiene 32 repartos de pesos distintos a la vez. En cada cabeza, el token suma los v permitidos multiplicado cada uno por su peso: o = Σ peso · v (128 números). Las 32 o se ponen una detrás de otra (32 × 128 = 4 096) y se multiplican por W_O: sale un único Δ, que se suma a h.',
+  d:'A la izquierda, una cabeza: sus cinco v con sus pesos; detrás, las otras 31. A la derecha, tres cabezas con repartos distintos para «sentó»: cada fila suma 1 por separado, así que una puede mirar a «se», otra a «gato» y otra a «el» al mismo tiempo. Las cabezas usan la misma fórmula; se diferencian solo porque sus columnas empezaron con números aleatorios distintos. En el centro, la operación final, número a número: h′ = h + Δ.',
+  target:[97,3.8,0],off:[1,2.5,28.5]},
+ {e:'B · UNA PREDICCIÓN · 5 / 7',t:'MLP: ampliar, no linealidad, reducir',
+  g:'Segunda parte de la capa, después de normalizar. Cada token por separado, sin mirar a los demás: h se multiplica por W_up (4 096 → 14 336), se aplica una función no lineal número a número y se multiplica por W_down (14 336 → 4 096). El resultado se suma a h.',
+  d:'Las celdas oscuras de f(a) son valores que la función no lineal deja en cero o casi. Muchos modelos actuales añaden una tercera matriz (gate) cuyo resultado multiplica al de W_up; el esquema es el mismo. El MLP tiene cerca del 70 % de los parámetros del modelo.',
+  target:[119.5,3,0],off:[0,2.5,25]},
+ {e:'B · UNA PREDICCIÓN · 6 / 7',t:'32 capas seguidas y la caché KV',
+  g:'Atención + MLP forman una capa, llamada bloque transformer. La salida de un bloque es la entrada del siguiente, 32 veces, y cada bloque tiene sus propias matrices. Un transformer es esto: embedding, la pila de bloques y la salida. En cada capa se procesan a la vez todos los tokens del texto. A la capa siguiente solo pasa h: q, k y v no suben. Cada capa calcula las suyas desde cero a partir de su h (q = h·W_Q, k = h·W_K, v = h·W_V) con sus propias matrices; lo que la atención de una capa encontró llega a la siguiente porque ya está sumado en h (Δ). Los k y v de cada token, capa y cabeza se guardan en la caché KV de esa capa.',
+  d:'Columnas: tokens. Filas: capas. El color pasa de gris a verde a medida que h acumula las sumas de cada capa. Los cubos verdes detrás de cada celda son sus k y v guardados. En la capa 3 se ven los pesos de atención de «sentó» hacia los tokens anteriores. Las flechas ámbar de la derecha son lo único que pasa de una fila a la siguiente: h. La caché no cambia de capa, cambia de token: los k y v de «gato» en la capa 3 solo los vuelve a usar la capa 3, cuando calcule los tokens que vengan después.',
+  target:[144,3,0],off:[3,4,27]},
+ {e:'B · UNA PREDICCIÓN · 7 / 7',t:'Salida: logits, softmax y muestreo',
+  g:'Se toma el h final del último token y se multiplica por W_U (4 096 × 128 000): sale un número (logit) por cada token del vocabulario. Softmax los convierte en probabilidades que suman 1. Se elige un token al azar según esas probabilidades.',
+  d:'Arriba, los logits de diez candidatos; abajo, sus probabilidades. Sale «en» (0,41), pero podría haber salido «sobre» (0,22): por eso el mismo texto puede dar respuestas distintas. La temperatura divide los logits antes del softmax: por debajo de 1 concentra la probabilidad, por encima la reparte.',
+  target:[168,2.4,0],off:[0,2,25]},
+ {e:'C · GENERAR',t:'Añadir el token y repetir',
+  g:'El token elegido se añade al final y el proceso se repite solo para él: su fila de E y, en cada capa, sus q, k y v. Su q se compara con los k guardados en la caché de esa capa, así que no se recalcula nada de los tokens anteriores. Sus k y v se añaden a la caché.',
+  d:'El punto ámbar sube por la columna del token nuevo; en cada capa lee los k · v guardados de esa misma capa. Arriba, el muestreo elige el siguiente token y empieza otra columna. Se repite hasta generar un token de fin o llegar a un límite de longitud.',
+  target:[192.5,3.4,0],off:[2,3.5,26]}
+];
+
+var cur=0,userYaw=0,userPitch=0,userZoom=1;
+var elE=document.getElementById('stepEyebrow'),
+    elT=document.getElementById('stepTitle'),
+    elG=document.getElementById('stepGeneral'),
+    elD=document.getElementById('stepText'),
+    elBody=document.getElementById('stepBody'),
+    bPrev=document.getElementById('prev'),
+    bNext=document.getElementById('next'),
+    dotsEl=document.getElementById('dots'),
+    hintEl=document.getElementById('hint');
+var dots=[];
+STEPS.forEach(function(s,i){
+  var d=document.createElement('button');
+  d.className='dot';d.setAttribute('role','tab');
+  d.setAttribute('aria-label','Ir al paso '+i);
+  d.addEventListener('click',function(){goStep(i);});
+  dotsEl.appendChild(d);dots.push(d);
+});
+function goStep(i){
+  cur=clamp(i,0,STEPS.length-1);
+  userYaw=0;userPitch=0;userZoom=1;
+  var s=STEPS[cur];
+  elE.textContent=s.e;elT.textContent=s.t;elG.textContent=s.g;elD.textContent=s.d;
+  elBody.scrollTop=0;
+  bPrev.disabled=(cur===0);bNext.disabled=(cur===STEPS.length-1);
+  dots.forEach(function(d,j){d.classList.toggle('on',j===cur);});
+}
+bPrev.addEventListener('click',function(){goStep(cur-1);});
+bNext.addEventListener('click',function(){goStep(cur+1);});
+window.addEventListener('keydown',function(e){
+  if(e.key==='ArrowRight'){goStep(cur+1);}
+  if(e.key==='ArrowLeft'){goStep(cur-1);}
+});
+goStep(0);
+
+/* ---------- camera rig ---------- */
+var lookCur=new THREE.Vector3(),sph=new THREE.Spherical();
+function desired(){
+  var s=STEPS[cur];
+  var t=new THREE.Vector3().fromArray(s.target);
+  var off=new THREE.Vector3().fromArray(s.off);
+  sph.setFromVector3(off);
+  sph.theta+=userYaw;
+  sph.phi=clamp(sph.phi+userPitch,0.18,Math.PI-0.25);
+  sph.radius*=userZoom;
+  var p=new THREE.Vector3().setFromSpherical(sph).add(t);
+  return {p:p,t:t};
+}
+var d0=desired();
+camera.position.copy(d0.p);lookCur.copy(d0.t);
+
+/* ---------- input ---------- */
+var ptrs=new Map(),drag=false,px=0,py=0,pinchD=0,hintHidden=false;
+function hideHint(){if(!hintHidden){hintHidden=true;hintEl.classList.add('off');}}
+setTimeout(hideHint,8000);
+canvas.addEventListener('pointerdown',function(e){
+  canvas.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId,[e.clientX,e.clientY]);
+  drag=true;px=e.clientX;py=e.clientY;hideHint();
+});
+canvas.addEventListener('pointermove',function(e){
+  if(!ptrs.has(e.pointerId))return;
+  ptrs.set(e.pointerId,[e.clientX,e.clientY]);
+  if(ptrs.size===2){
+    var a=Array.from(ptrs.values());
+    var d2=Math.hypot(a[0][0]-a[1][0],a[0][1]-a[1][1]);
+    if(pinchD>0){userZoom=clamp(userZoom*(pinchD/d2),0.45,2.4);}
+    pinchD=d2;return;
+  }
+  if(!drag)return;
+  userYaw-=(e.clientX-px)*0.005;
+  userPitch-=(e.clientY-py)*0.004;
+  userPitch=clamp(userPitch,-0.9,0.9);
+  px=e.clientX;py=e.clientY;
+});
+function endPtr(e){
+  ptrs.delete(e.pointerId);
+  if(ptrs.size<2)pinchD=0;
+  if(ptrs.size===0)drag=false;
+}
+canvas.addEventListener('pointerup',endPtr);
+canvas.addEventListener('pointercancel',endPtr);
+canvas.addEventListener('wheel',function(e){
+  e.preventDefault();
+  userZoom=clamp(userZoom*(1+e.deltaY*0.001),0.45,2.4);
+  hideHint();
+},{passive:false});
+
+/* ---------- loop ---------- */
+function resize(){
+  var w=window.innerWidth,h=window.innerHeight;
+  renderer.setSize(w,h,false);
+  camera.aspect=w/h;
+  /* shift the framing away from the panel: right of it on desktop, above it on phones */
+  if(w>=760){camera.setViewOffset(w,h,-Math.min(160,w*0.11),h*0.07,w,h);}
+  else{camera.setViewOffset(w,h,0,h*0.16,w,h);}
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize',resize);resize();
+
+var last=performance.now(),time=0,placed=false;
+function placeStatic(){
+  pulses.forEach(function(p){p.m.position.lerpVectors(p.a,p.b,0.55);p.m.material.opacity=0.8;});
+  cpulses.forEach(function(p){p.m.position.copy(p.c.getPoint(0.55));p.m.material.opacity=0.8;});
+  anims.forEach(function(a){a.still();});
+}
+function tick(now){
+  var dt=Math.min(0.05,(now-last)/1000);last=now;time+=dt;
+  if(RM){
+    if(!placed){placeStatic();placed=true;}
+  }else{
+    pulses.forEach(function(p){
+      p.t=(p.t+dt*p.sp)%1;
+      p.m.position.lerpVectors(p.a,p.b,ease(p.t));
+      p.m.material.opacity=0.15+0.85*Math.sin(Math.PI*p.t);
+    });
+    cpulses.forEach(function(p){
+      p.t=(p.t+dt*p.sp)%1;
+      p.m.position.copy(p.c.getPoint(ease(p.t)));
+      p.m.material.opacity=0.15+0.85*Math.sin(Math.PI*p.t);
+    });
+    anims.forEach(function(a){a.tick(time,dt);});
+  }
+  var d=desired();
+  var cl=RM?1:0.055;
+  camera.position.lerp(d.p,cl);
+  lookCur.lerp(d.t,RM?1:0.075);
+  camera.lookAt(lookCur);
+  renderer.render(scene,camera);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+})();
+//JS-END
+</script>
+</body>
+</html>
